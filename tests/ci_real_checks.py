@@ -81,7 +81,8 @@ def mac_double_click_opens_omnilaunch():
     subprocess.run(["/usr/bin/open", exe], check=True)
     deadline = time.time() + 60
     while time.time() < deadline:
-        if os.path.exists(log) and f"opening {exe}" in open(log).read():
+        # macOS reports temp files under /private/var, the real path of /var
+        if os.path.exists(log) and f"opening {os.path.realpath(exe)}" in open(log).read():
             return "Finder -> OmniLaunch.app -> omnilaunch run --gui " + exe
         time.sleep(2)
     raise AssertionError("OmniLaunch didn't receive the file. Log: " +

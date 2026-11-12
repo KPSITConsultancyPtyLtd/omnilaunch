@@ -93,7 +93,20 @@ class Installer:
 
 # ---------------------------------------------------------------- downloads
 
-def _fetch(url: str, dest: str | None = None) -> bytes:
+def _fetch(url: str, dest: str | None = None, attempts: int = 3) -> bytes:
+    """Download, retrying a couple of times: networks (and GitHub's API) drop connections now and then."""
+    import time
+    for attempt in range(attempts):
+        try:
+            return _fetch_once(url, dest)
+        except (subprocess.CalledProcessError, OSError):
+            if attempt == attempts - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
+    return b""
+
+
+def _fetch_once(url: str, dest: str | None = None) -> bytes:
     """Download with curl when available (it uses the system's certificates), else urllib."""
     curl = shutil.which("curl")
     if curl:
