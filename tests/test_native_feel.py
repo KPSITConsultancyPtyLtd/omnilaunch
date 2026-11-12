@@ -1,6 +1,7 @@
 """Tests for the 'feels native' features: Android apps, Proton games, installers, double-click and dialogs."""
 
 import os
+import plistlib
 import struct
 import sys
 import unittest
@@ -233,14 +234,26 @@ class ShortcutTests(TmpCase):
         self.host("macos", "arm64")
         apps = os.path.join(self.d, "Applications", "OmniLaunch Apps")
 
-        def fake_osacompile(argv, **kw):
-            os.makedirs(argv[argv.index("-o") + 1])
+        scripts = []
+
+        def fake_run(argv, **kw):
+            if argv[0].endswith("osacompile"):
+                out = argv[argv.index("-o") + 1]
+                os.makedirs(os.path.join(out, "Contents"))
+                with open(os.path.join(out, "Contents", "Info.plist"), "wb") as f:
+                    plistlib.dump({"CFBundleName": "applet"}, f)
+                scripts.append(argv[argv.index("-e") + 1])
             return mock.Mock(returncode=0)
 
         with mock.patch.object(shortcuts, "launcher_dir", return_value=apps), \
-                mock.patch.object(shortcuts.subprocess, "run", side_effect=fake_osacompile):
+                mock.patch.object(shortcuts.subprocess, "run", side_effect=fake_run):
             app = shortcuts.create_launcher("7-Zip File Manager", "wine/7z-1", "/x/7zFM.exe")
         self.assertEqual(app, os.path.join(apps, "7-Zip File Manager.app"))
+        self.assertIn("on open theFiles", scripts[0])                 # works with Finder's Open With
+        with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+            plist = plistlib.load(f)
+        self.assertIn("public.data", plist["CFBundleDocumentTypes"][0]["LSItemContentTypes"])
+        self.assertEqual(plist["CFBundleIdentifier"], "com.kpsit.omnilaunch.app.7-zip-file-manager")
         link = os.path.join(self.d, "Desktop", "7-Zip File Manager.app")
         self.assertEqual(os.readlink(link), app)
 
@@ -252,6 +265,15 @@ class ShortcutTests(TmpCase):
         self.assertEqual(lp.env["WINEPREFIX"], root)
         with self.assertRaises(runners.UnsupportedApp):
             runners.plan(detect(exe), env_name="wine/nope")
+
+    @unittest.skipIf(os.name == "nt", "POSIX paths")
+    def test_files_passed_to_windows_programs_become_windows_paths(self):
+        root = self.prefix()
+        self.with_tools("wine")
+        archive = _write(self.d, "photos.zip", b"PK\x03\x04")
+        exe = os.path.join(root, "drive_c", "Program Files", "Foo App", "foo.exe")
+        lp = runners.plan(detect(exe), [archive, "/S"])
+        self.assertEqual(lp.argv[-2:], ["Z:" + archive.replace("/", "\\"), "/S"])
 
     def test_program_inside_an_environment_reuses_it(self):
         """Opening an installed program directly must not create a second Windows environment."""

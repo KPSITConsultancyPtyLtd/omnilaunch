@@ -194,12 +194,28 @@ def create_launcher(name: str, env_name: str, target: str, args: str = "", deskt
         from .desktop import MAC_PATH, _applescript_string
         app = os.path.join(launcher_dir(), _safe_name(name) + ".app")
         os.makedirs(launcher_dir(), exist_ok=True)
-        cmd = 'export PATH="' + MAC_PATH + '"; ' + " ".join(shlex.quote(a) for a in argv + extra) + " >/dev/null 2>&1 &"
-        script = f"on run\n\tdo shell script {_applescript_string(cmd)}\nend run\n"
+        cmd = 'export PATH="' + MAC_PATH + '"; ' + " ".join(shlex.quote(a) for a in argv + extra)
+        quiet = " >/dev/null 2>&1 &"
+        # 'on open' makes the app usable with Finder's Open With: the chosen files are passed to the program.
+        script = "\n".join([
+            "on run",
+            f"\tdo shell script {_applescript_string(cmd + quiet)}",
+            "end run",
+            "",
+            "on open theFiles",
+            "\tset fileArgs to \"\"",
+            "\trepeat with f in theFiles",
+            "\t\tset fileArgs to fileArgs & \" \" & quoted form of (POSIX path of f)",
+            "\tend repeat",
+            f"\tdo shell script {_applescript_string(cmd)} & fileArgs & {_applescript_string(quiet)}",
+            "end open",
+            "",
+        ])
         if os.path.exists(app):
             import shutil
             shutil.rmtree(app)
         subprocess.run(["/usr/bin/osacompile", "-o", app, "-e", script], check=True, capture_output=True)
+        _make_open_with_target(app, name)
         path = app
     else:
         from .desktop import _exec_quote
@@ -210,12 +226,42 @@ def create_launcher(name: str, env_name: str, target: str, args: str = "", deskt
             f.write("\n".join([
                 "[Desktop Entry]", "Type=Application", f"Name={name}",
                 "Comment=Windows app, opened with OmniLaunch",
-                "Exec=" + " ".join(_exec_quote(a) for a in argv + extra),
+                "Exec=" + " ".join(_exec_quote(a) for a in argv + extra) + " %F",
+                "MimeType=application/octet-stream;application/zip;application/x-7z-compressed;"
+                "application/x-rar;text/plain;",
                 "Icon=application-x-ms-dos-executable", "Terminal=false", "Categories=Wine;", "",
             ]))
     if desktop and desktop_shortcuts_enabled():
         _put_on_desktop(path, name)
     return path
+
+
+def _make_open_with_target(app: str, name: str) -> None:
+    """Let Finder offer this app under Open With for any file, like a native app (macOS)."""
+    import plistlib
+    plist_path = os.path.join(app, "Contents", "Info.plist")
+    try:
+        with open(plist_path, "rb") as f:
+            plist = plistlib.load(f)
+    except (OSError, plistlib.InvalidFileException):
+        return
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "app"
+    plist.update({
+        "CFBundleIdentifier": f"com.kpsit.omnilaunch.app.{slug}",
+        "CFBundleName": name,
+        "CFBundleDisplayName": name,
+        "CFBundleDocumentTypes": [{
+            "CFBundleTypeName": "Any file",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["public.data", "public.content", "public.archive"],
+        }],
+    })
+    with open(plist_path, "wb") as f:
+        plistlib.dump(plist, f)
+    subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", app], capture_output=True, check=False)
+    from .desktop import LSREGISTER
+    subprocess.run([LSREGISTER, "-f", app], capture_output=True, check=False)
 
 
 def scan(prefix: str, env_name: str, before: dict | None = None, desktop: bool = True):

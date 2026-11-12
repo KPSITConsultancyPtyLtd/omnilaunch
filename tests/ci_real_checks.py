@@ -96,6 +96,10 @@ def mac_installed_program_launcher():
     app = shortcuts.create_launcher("OmniLaunch CI Test", "wine/ci-test", "/tmp/ci/foo.exe")
     assert app.startswith(shortcuts.launcher_dir()) and os.path.isdir(app), app
     subprocess.run(["/usr/bin/plutil", "-lint", os.path.join(app, "Contents", "Info.plist")], check=True)
+    with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
+        plist = plistlib.load(f)
+    assert plist["CFBundleDocumentTypes"][0]["LSItemContentTypes"], "not offered under Open With"
+    subprocess.run(["/usr/bin/codesign", "--verify", app], check=True)
     link = os.path.expanduser("~/Desktop/OmniLaunch CI Test.app")
     assert os.path.islink(link) and os.readlink(link) == app, link
     return f"{app} (+ Desktop shortcut)"

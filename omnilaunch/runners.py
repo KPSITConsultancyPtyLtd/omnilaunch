@@ -192,6 +192,15 @@ def app_id(info: AppInfo) -> str:
     return f"{base}-{digest}"
 
 
+def host_path_for_windows(arg: str) -> str:
+    """Files passed to a Windows program (e.g. 'open this .zip with 7-Zip') must be Windows paths.
+    Wine shows this computer's whole filesystem as drive Z:, so /Users/me/a.zip -> Z:\\Users\\me\\a.zip.
+    Anything that isn't an existing absolute path (options like /S) is passed through unchanged."""
+    if HOST_OS == "windows" or not arg.startswith("/") or not os.path.exists(arg):
+        return arg
+    return "Z:" + arg.replace("/", "\\")
+
+
 def enclosing_env(path: str) -> str | None:
     """If an app lives inside one of OmniLaunch's environments (a program an installer put there),
     the name of that environment, e.g. "wine/7z2606-x64-8dc73050". Running the program there
@@ -587,7 +596,8 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
                 env["PROTONPATH"] = os.path.dirname(os.path.abspath(proton))
             notes.append("Running through Proton (umu-launcher). The first launch downloads Proton and "
                          "the Steam runtime, which takes a few minutes.")
-            return LaunchPlan("proton (umu)", [umu, *special.get(ext, []), info.executable, *args],
+            return LaunchPlan("proton (umu)", [umu, *special.get(ext, []), info.executable,
+                                               *[host_path_for_windows(a) for a in args]],
                               env, notes, prefix=root)
         if not proton or not os.path.exists(proton):
             raise UnsupportedApp("Proton (the best way to run Windows games on Linux) isn't installed.",
@@ -609,7 +619,7 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
     if not verbose:
         env["WINEDEBUG"] = "-all"
 
-    argv = [wine, *special.get(ext, []), info.executable, *args]
+    argv = [wine, *special.get(ext, []), info.executable, *[host_path_for_windows(a) for a in args]]
     label = f"wine ({ext.lstrip('.')})" if ext in special else "wine"
     return LaunchPlan(label, argv, env, notes, prefix=root)
 
