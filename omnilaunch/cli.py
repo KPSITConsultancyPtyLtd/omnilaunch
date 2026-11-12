@@ -7,9 +7,9 @@ import os
 import sys
 import time
 
-from . import __version__, desktop, envs
+from . import __version__, desktop, envs, runners
 from .detect import detect
-from .runners import HOST_ARCH, RUNNERS, UnsupportedApp, plan, which
+from .runners import RUNNERS, UnsupportedApp, plan, which
 
 RUN_FLAGS = {"--dry-run", "--verbose", "-v", "--notify"}
 
@@ -154,21 +154,40 @@ def _run(ns: argparse.Namespace) -> int:
 
 
 def _doctor() -> int:
-    print(f"OmniLaunch {__version__} - host CPU: {HOST_ARCH}\n")
-    proton = os.environ.get("OMNILAUNCH_PROTON")
-    rows = [("Linux apps", True, "")]
-    rows.append(("Windows apps (Wine)", bool(which("wine", "wine64")), "install the 'wine' package"))
-    rows.append(("Windows games (Proton)", bool(proton and os.path.exists(proton)),
-                 "set OMNILAUNCH_PROTON=/path/to/proton"))
-    rows.append(("macOS apps (Darling)", bool(which("darling")), "see https://www.darlinghq.org"))
-    if HOST_ARCH not in ("x86_64", "x86"):
-        rows.append(("x86 apps on this CPU", bool(which("box64", "FEXInterpreter", "qemu-x86_64")),
-                     "install box64 or FEX-Emu"))
-    rows.append(("Double-click integration",
-                 os.path.exists(os.path.join(desktop.applications_dir(), desktop.DESKTOP_ID)),
-                 "run: omnilaunch integrate"))
+    os_name = "macOS" if runners.HOST_OS == "macos" else runners.HOST_OS.capitalize()
+    print(f"OmniLaunch {__version__} - {os_name} on {runners.HOST_ARCH}, Python {sys.version.split()[0]}\n")
+    wine = runners.find_wine()
+    engine = runners.find_container_engine()
+    rows = []
+    if runners.HOST_OS == "macos":
+        rows.append(("Mac apps", True, ""))
+        if runners.HOST_ARCH == "arm64":
+            rows.append(("Intel Mac apps (Rosetta 2)", runners.rosetta_installed(),
+                         "softwareupdate --install-rosetta --agree-to-license"))
+        rows.append(("Windows apps (Wine)", bool(wine),
+                     "download Wine Stable from github.com/Gcenx/macOS_Wine_builds"))
+        rows.append(("Linux command-line apps (container)", bool(engine),
+                     "install OrbStack, Docker Desktop or Podman, and start it"))
+    else:
+        proton = os.environ.get("OMNILAUNCH_PROTON")
+        rows.append(("Linux apps", True, ""))
+        rows.append(("Windows apps (Wine)", bool(wine), "install the 'wine' package"))
+        rows.append(("Windows games (Proton)", bool(proton and os.path.exists(proton)),
+                     "set OMNILAUNCH_PROTON=/path/to/proton"))
+        rows.append(("macOS apps (Darling)", bool(which("darling")), "see https://www.darlinghq.org"))
+        if runners.HOST_ARCH not in ("x86_64", "x86"):
+            rows.append(("x86 apps on this CPU", bool(which("box64", "FEXInterpreter", "qemu-x86_64")),
+                         "install box64 or FEX-Emu"))
+        rows.append(("Double-click integration",
+                     os.path.exists(os.path.join(desktop.applications_dir(), desktop.DESKTOP_ID)),
+                     "run: omnilaunch integrate"))
     for label, ok, fix in rows:
         print(f"  [{'OK ' if ok else '-- '}] {label}" + ("" if ok else f"  ({fix})"))
+    if wine:
+        print(f"\n  Wine: {wine}")
+    if engine:
+        print(f"  Container engine: {engine}")
+    print(f"  Environments stored in: {runners.data_dir()}")
     return 0
 
 
@@ -198,7 +217,12 @@ def _integrate(ns: argparse.Namespace) -> int:
     if ns.remove:
         print("Removed desktop integration." if desktop.unintegrate() else "Desktop integration wasn't installed.")
         return 0
-    for step in desktop.integrate(dry_run=ns.dry_run):
+    try:
+        steps = desktop.integrate(dry_run=ns.dry_run)
+    except desktop.NotSupportedHere as e:
+        print(str(e))
+        return 1
+    for step in steps:
         print(("would " if ns.dry_run else "") + step)
     if not ns.dry_run:
         print("Done. Double-clicking .exe, .msi and Mac binaries now opens them with OmniLaunch.")

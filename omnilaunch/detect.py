@@ -38,6 +38,7 @@ MACHO_MAGICS = {
     b"\xfe\xed\xfa\xcf": ">", b"\xcf\xfa\xed\xfe": "<",   # 64-bit
 }
 FAT_MAGIC = b"\xca\xfe\xba\xbe"
+FAT_MAGIC_64 = b"\xca\xfe\xba\xbf"
 WINDOWS_EXTS = (".msi", ".bat", ".cmd", ".lnk")
 ARCHIVE_EXTS = (".dmg", ".pkg", ".zip", ".7z", ".tar.gz", ".tgz", ".tar.xz")
 
@@ -62,7 +63,7 @@ def detect(path: str) -> AppInfo:
 
     try:
         with open(path, "rb") as f:
-            head = f.read(4096)
+            head = f.read(65536)  # large enough for PE headers behind big DOS stubs
     except OSError as e:
         return AppInfo(path, path, Platform.UNKNOWN, kind=f"unreadable ({e.strerror})")
 
@@ -74,7 +75,7 @@ def detect(path: str) -> AppInfo:
             return _pe(path, head)
         if head[:4] in MACHO_MAGICS:
             return _macho(path, head)
-        if head[:4] == FAT_MAGIC and _looks_like_fat_macho(head):
+        if head[:4] in (FAT_MAGIC, FAT_MAGIC_64) and _looks_like_fat_macho(head):
             return _fat_macho(path, head)
     except (struct.error, IndexError):
         return AppInfo(path, path, Platform.UNKNOWN, kind="truncated or corrupt binary")
@@ -130,9 +131,10 @@ def _macho(path: str, head: bytes) -> AppInfo:
 
 def _fat_macho(path: str, head: bytes) -> AppInfo:
     n = struct.unpack_from(">I", head, 4)[0]
+    entry = 32 if head[:4] == FAT_MAGIC_64 else 20
     archs = []
     for i in range(n):
-        off = 8 + i * 20
+        off = 8 + i * entry
         if off + 4 > len(head):
             break
         cpu = struct.unpack_from(">I", head, off)[0]

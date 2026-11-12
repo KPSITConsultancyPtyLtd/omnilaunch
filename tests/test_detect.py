@@ -11,7 +11,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from omnilaunch import cli, desktop, envs, runners  # noqa: E402
-from omnilaunch.detect import ELF_MACHINES, Platform, detect  # noqa: E402
+from omnilaunch.detect import Platform, detect  # noqa: E402
 
 
 def _write(d, name, data, mode=0o755):
@@ -53,7 +53,7 @@ def fake_fat(*cpus):
     return b"\xca\xfe\xba\xbe" + struct.pack(">I", len(cpus)) + body
 
 
-HOST_ELF = {v: k for k, v in ELF_MACHINES.items()}[runners.HOST_ARCH]
+HOST_ELF = 0x3E  # tests pretend to be an x86_64 Linux host unless they say otherwise
 
 
 class TmpCase(unittest.TestCase):
@@ -66,6 +66,14 @@ class TmpCase(unittest.TestCase):
         os.environ.pop("OMNILAUNCH_PROTON", None)
         self.addCleanup(patcher.stop)
         self.addCleanup(self.tmp.cleanup)
+        self.host("linux", "x86_64")
+
+    def host(self, os_name, arch):
+        """Pretend to be a particular host, so tests behave the same on Linux and macOS."""
+        for name, value in (("HOST_OS", os_name), ("HOST_ARCH", arch)):
+            p = mock.patch.object(runners, name, value)
+            p.start()
+            self.addCleanup(p.stop)
 
     def with_tools(self, *names):
         """Pretend only these compatibility tools are installed."""
@@ -133,7 +141,6 @@ class PlanTests(TmpCase):
         lp = runners.plan(detect(_write(self.d, "app", fake_elf(HOST_ELF))))
         self.assertEqual((lp.runner, lp.cwd), ("native", self.d))
 
-    @unittest.skipUnless(runners.HOST_ARCH == "x86_64", "x86_64 host only")
     def test_32bit_runs_natively_on_64bit(self):
         self.assertEqual(runners.plan(detect(_write(self.d, "app", fake_elf(0x03)))).runner, "native")
 
@@ -197,7 +204,6 @@ class PlanTests(TmpCase):
             runners.plan(detect(_write(self.d, "tool", fake_macho())))
         self.assertIn("Intel", cm.exception.hint)
 
-    @unittest.skipUnless(runners.HOST_ARCH == "x86_64", "Darling is x86_64-only")
     def test_universal_mac_binary_runs_in_darling(self):
         self.with_tools("darling")
         lp = runners.plan(detect(_write(self.d, "uni", fake_fat(0x01000007, 0x0100000C))))
@@ -207,6 +213,99 @@ class PlanTests(TmpCase):
         with self.assertRaises(runners.UnsupportedApp) as cm:
             runners.plan(detect(_write(self.d, "x.dmg", b"")))
         self.assertIn("7z", cm.exception.hint)
+
+
+class MacHostTests(TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.host("macos", "arm64")
+
+    def bundle(self, cpu):
+        b = os.path.join(self.d, "Hello.app")
+        os.makedirs(os.path.join(b, "Contents", "MacOS"))
+        _write(os.path.join(b, "Contents", "MacOS"), "Hello", fake_macho(cpu))
+        return b
+
+    def test_app_bundle_opens_with_open(self):
+        lp = runners.plan(detect(self.bundle(0x0100000C)), ["--x"])
+        self.assertEqual(lp.argv[0], "/usr/bin/open")
+        self.assertEqual(lp.argv[2:], ["--args", "--x"])
+
+    def test_native_mac_binary(self):
+        lp = runners.plan(detect(_write(self.d, "tool", fake_macho())))
+        self.assertEqual(lp.runner, "native")
+
+    def test_intel_app_needs_rosetta(self):
+        app = detect(self.bundle(0x01000007))
+        with mock.patch.object(runners, "rosetta_installed", return_value=False):
+            with self.assertRaises(runners.UnsupportedApp) as cm:
+                runners.plan(app)
+        self.assertIn("install-rosetta", cm.exception.hint)
+        with mock.patch.object(runners, "rosetta_installed", return_value=True):
+            self.assertIn("Rosetta", " ".join(runners.plan(app).notes))
+
+    def test_universal_runs_natively(self):
+        lp = runners.plan(detect(_write(self.d, "uni", fake_fat(0x01000007, 0x0100000C))))
+        self.assertEqual(lp.runner, "native")
+
+    def test_linux_app_goes_to_container(self):
+        self.with_tools("docker")
+        app = _write(self.d, "tool", fake_elf())
+        lp = runners.plan(detect(app), ["a"])
+        self.assertEqual(lp.argv[:4], ["/usr/bin/docker", "run", "--rm", "-i"])
+        self.assertIn("linux/amd64", lp.argv)
+        self.assertEqual(lp.argv[-2:], [app, "a"])
+        self.assertIn(f"{self.d}:{self.d}", lp.argv)
+
+    def test_linux_app_without_engine_explains(self):
+        self.with_tools()
+        with self.assertRaises(runners.UnsupportedApp) as cm:
+            runners.plan(detect(_write(self.d, "tool", fake_elf())))
+        self.assertIn("OrbStack", cm.exception.hint)
+
+    def test_windows_on_mac_uses_wine_never_proton(self):
+        self.with_tools("wine")
+        proton = _write(self.d, "proton", b"#!/bin/sh\n")
+        with mock.patch.dict(os.environ, {"OMNILAUNCH_PROTON": proton}), \
+                mock.patch.object(runners, "rosetta_installed", return_value=True):
+            lp = runners.plan(detect(_write(self.d, "a.exe", fake_pe())))
+        self.assertEqual(lp.runner, "wine")
+
+    def test_mac_wine_app_bundle_found(self):
+        self.with_tools()
+        fake = os.path.join(self.d, "Wine Stable.app", "Contents", "Resources", "wine", "bin", "wine")
+        os.makedirs(os.path.dirname(fake))
+        _write(os.path.dirname(fake), "wine", b"#!/bin/sh\n")
+        with mock.patch.object(runners, "MAC_WINE_GLOBS",
+                               [os.path.join(self.d, "Wine*.app/Contents/Resources/wine/bin/wine")]):
+            self.assertEqual(runners.find_wine(), fake)
+
+    def test_wine_missing_on_mac_points_to_standalone_build(self):
+        self.with_tools()
+        with mock.patch.object(runners, "MAC_WINE_GLOBS", []):
+            with self.assertRaises(runners.UnsupportedApp) as cm:
+                runners.plan(detect(_write(self.d, "a.exe", fake_pe())))
+        self.assertIn("Gcenx", cm.exception.hint)
+
+    def test_darling_refused_on_mac(self):
+        with self.assertRaises(runners.UnsupportedApp):
+            runners.plan(detect(_write(self.d, "tool", fake_macho())), runner="darling")
+
+    def test_mac_data_dir(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("OMNILAUNCH_HOME")
+            self.assertTrue(runners.data_dir().endswith("Library/Application Support/OmniLaunch"))
+
+    def test_integrate_not_supported(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["integrate"]), 1)
+
+    def test_doctor_runs(self):
+        self.with_tools()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(runners, "rosetta_installed", return_value=False):
+            cli.main(["doctor"])
+        self.assertIn("Rosetta", out.getvalue())
 
 
 class CliTests(TmpCase):
@@ -238,6 +337,14 @@ class CliTests(TmpCase):
         self.assertEqual(self.run_cli("envs", "remove", "wine")[0], 2)
         self.assertEqual(self.run_cli("envs", "remove", "wine/app-1")[0], 0)
         self.assertEqual(envs.list_envs(), [])
+
+    def test_doctor_runs_on_linux(self):
+        self.with_tools()
+        self.assertEqual(self.run_cli("doctor")[0], 0)
+
+    def test_desktop_exec_quotes_paths_with_spaces(self):
+        self.assertEqual(desktop._exec_quote("/a b/py"), '"/a b/py"')
+        self.assertEqual(desktop._exec_quote("/usr/bin/python3"), "/usr/bin/python3")
 
     def test_integrate_writes_desktop_file(self):
         with mock.patch.object(desktop.shutil, "which", return_value=None):

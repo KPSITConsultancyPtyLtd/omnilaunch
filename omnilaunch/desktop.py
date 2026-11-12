@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import subprocess
 import sys
+
+from . import runners
 
 DESKTOP_ID = "omnilaunch.desktop"
 
@@ -31,13 +32,21 @@ def applications_dir() -> str:
     return os.path.join(base, "applications")
 
 
+def _exec_quote(arg: str) -> str:
+    """Quote one argument for a .desktop Exec line (the spec requires double quotes, not single)."""
+    if arg and all(c.isalnum() or c in "/-_.=+:," for c in arg):
+        return arg
+    escaped = arg.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$")
+    return '"' + escaped.replace("%", "%%") + '"'
+
+
 def launcher_command() -> str:
     exe = shutil.which("omnilaunch")
     if exe:
-        return shlex.quote(exe)
+        return _exec_quote(exe)
     pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # Fall back to running the package from where it lives.
-    return f"env PYTHONPATH={shlex.quote(pkg_parent)} {shlex.quote(sys.executable)} -m omnilaunch"
+    return " ".join(_exec_quote(a) for a in ("env", f"PYTHONPATH={pkg_parent}", sys.executable, "-m", "omnilaunch"))
 
 
 def desktop_entry() -> str:
@@ -56,7 +65,15 @@ def desktop_entry() -> str:
     ])
 
 
+class NotSupportedHere(Exception):
+    pass
+
+
 def integrate(dry_run: bool = False) -> list[str]:
+    if runners.HOST_OS != "linux":
+        raise NotSupportedHere(
+            "Double-click integration is Linux-only for now. On a Mac, run apps from Terminal with "
+            "`omnilaunch run <app>`; Mac apps already open natively when double-clicked.")
     path = os.path.join(applications_dir(), DESKTOP_ID)
     steps = [f"write {path}"]
     if not dry_run:
@@ -88,5 +105,10 @@ def unintegrate() -> bool:
 
 def notify(title: str, body: str) -> None:
     """Show a desktop notification (used when launched by double-click, with no terminal)."""
-    if shutil.which("notify-send"):
+    if runners.HOST_OS == "macos":
+        # Pass text as arguments rather than splicing it into the script, so quotes can't break it.
+        script = ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
+                  "-e", "end run"]
+        subprocess.run(["/usr/bin/osascript", *script, title, body], check=False)
+    elif shutil.which("notify-send"):
         subprocess.run(["notify-send", "-a", "OmniLaunch", title, body], check=False)
