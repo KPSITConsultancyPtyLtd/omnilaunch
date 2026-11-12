@@ -13,6 +13,8 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from unittest import mock  # noqa: E402
+
 from omnilaunch import android, cli, desktop, provision, runners  # noqa: E402
 from omnilaunch.detect import Platform, detect  # noqa: E402
 
@@ -22,10 +24,10 @@ FAILURES = []
 def check(name, fn):
     try:
         result = fn()
-        print(f"PASS  {name}" + (f": {result}" if result else ""))
+        print(f"PASS  {name}" + (f": {result}" if result else ""), flush=True)
     except Exception as e:  # noqa: BLE001 - report everything
         FAILURES.append(name)
-        print(f"FAIL  {name}: {type(e).__name__}: {e}")
+        print(f"FAIL  {name}: {type(e).__name__}: {e}", flush=True)
 
 
 def real_apk():
@@ -76,11 +78,15 @@ def mac_dmg_install():
     dmg = os.path.join(work, "OmniTest.dmg")
     subprocess.run(["/usr/bin/hdiutil", "create", "-quiet", "-srcfolder", os.path.dirname(app),
                     "-volname", "OmniTest", dmg], check=True)
-    code = cli.main(["run", dmg])
+    # Don't let OmniLaunch hand this process over to the installed app; just record what it would open.
+    with mock.patch.object(cli.os, "execvpe") as execvpe:
+        code = cli.main(["run", dmg])
     installed = [p for p in ("/Applications/OmniTest.app", os.path.expanduser("~/Applications/OmniTest.app"))
                  if os.path.isdir(p)]
     assert code == 0 and installed, f"exit {code}, installed={installed}"
-    return installed[0]
+    opened = execvpe.call_args[0][1]
+    assert opened == ["/usr/bin/open", installed[0]], opened
+    return f"installed and opened {installed[0]}"
 
 
 def windows_double_click():

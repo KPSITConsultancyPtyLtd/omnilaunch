@@ -211,7 +211,9 @@ def _run(ns: argparse.Namespace) -> int:
             return subprocess.call(lp.argv, cwd=lp.cwd or None, env=env)
         if lp.cwd:
             os.chdir(lp.cwd)
-        os.execvpe(lp.argv[0], lp.argv, env)  # replace ourselves with the app
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execvpe(lp.argv[0], lp.argv, env)  # replace ourselves with the app (unflushed output would be lost)
     except OSError as e:
         return _fail(f"launch failed: {e.strerror or e} ({lp.argv[0]})", "", gui, 4)
     except KeyboardInterrupt:

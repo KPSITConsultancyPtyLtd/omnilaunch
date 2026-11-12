@@ -226,7 +226,8 @@ def plan(info: AppInfo, args: list[str] | None = None, runner: str | None = None
     if runner and runner not in RUNNERS:
         raise UnsupportedApp(f"Unknown runner '{runner}'.", f"Choose one of: {', '.join(RUNNERS)}")
     if env_name:
-        env_root = os.path.join(data_dir(), "prefixes", env_name)
+        env_name = env_name.replace("\\", "/").strip("/")
+        env_root = os.path.join(data_dir(), "prefixes", *env_name.split("/"))
         if not os.path.isdir(env_root):
             raise UnsupportedApp(f"There's no environment called '{env_name}'.", "See: omnilaunch envs list")
         runner = runner or env_name.split("/", 1)[0]
@@ -546,7 +547,7 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
     if "DLL" in info.kind:
         raise UnsupportedApp(f"{os.path.basename(info.path)} is a Windows library (DLL), not an app.",
                              "Run the .exe that uses it instead.")
-    root = os.path.join(data_dir(), "prefixes", env_name or os.path.join(runner, app_id(info)))
+    root = os.path.join(data_dir(), "prefixes", *(env_name.split("/") if env_name else (runner, app_id(info))))
     notes = [f"Isolated Windows environment: {root}"]
     if not os.path.isdir(os.path.join(root, "drive_c")) and not os.path.isdir(os.path.join(root, "pfx")):
         notes.append("First launch: setting up the Windows environment can take a minute.")

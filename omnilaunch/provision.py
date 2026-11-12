@@ -71,6 +71,7 @@ class Installer:
         if argv and argv[0] == "sudo" and (self.gui or not sys.stdin.isatty()):
             from .desktop import run_as_admin
             argv = run_as_admin(argv[1:])
+        log = None
         if self.gui and "stdout" not in kw:
             os.makedirs(runners.data_dir(), exist_ok=True)
             log = open(os.path.join(runners.data_dir(), "setup.log"), "a")
@@ -81,6 +82,9 @@ class Installer:
             raise SetupError(f"'{argv[0]}' isn't available on this computer.")
         except subprocess.CalledProcessError as e:
             raise SetupError(f"'{' '.join(argv)}' failed (exit code {e.returncode}).")
+        finally:
+            if log:
+                log.close()
 
     def note(self, text: str) -> None:
         self.steps.append(f"# {text}")
