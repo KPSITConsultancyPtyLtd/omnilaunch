@@ -155,6 +155,8 @@ def _fail(msg: str, hint: str, gui: bool, code: int) -> int:
 
 def _run(ns: argparse.Namespace) -> int:
     gui = ns.gui or ns.notify
+    if gui:
+        print(f"[omnilaunch] {time.strftime('%Y-%m-%d %H:%M:%S')} opening {ns.app}", file=sys.stderr, flush=True)
     offered: set = set()
     while True:
         try:

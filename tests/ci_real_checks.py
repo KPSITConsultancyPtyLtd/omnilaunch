@@ -64,10 +64,28 @@ def mac_double_click():
     exts = {e for d in plist["CFBundleDocumentTypes"] for e in d["CFBundleTypeExtensions"]}
     assert {"exe", "msi", "apk", "AppImage"} <= exts, exts
     subprocess.run(["/usr/bin/codesign", "--verify", app], check=True)
+    print("      " + "\n      ".join(steps), flush=True)
     handlers = desktop.mac_default_handlers()
-    print("      default apps now:", handlers)
-    print("      " + "\n      ".join(steps))
-    return f"{sum(1 for h in handlers.values() if h.rstrip('/') == app)} of {len(handlers)} types open with OmniLaunch"
+    ours = [ext for ext, h in handlers.items() if h.lower() == desktop.MAC_BUNDLE_ID]
+    assert set(ours) == set(desktop.MAC_EXTENSIONS), f"default apps now: {handlers}"
+    return f"all of {', '.join('.' + e for e in ours)} open with OmniLaunch"
+
+
+def mac_double_click_opens_omnilaunch():
+    """Open a .exe exactly like a double-click in Finder does, and check OmniLaunch received it."""
+    import time
+    exe = os.path.join(tempfile.mkdtemp(), "hello.exe")
+    with open(exe, "wb") as f:
+        f.write(b"MZ" + bytes(510))
+    log = os.path.join(runners.data_dir(), "omnilaunch.log")
+    subprocess.run(["/usr/bin/open", exe], check=True)
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if os.path.exists(log) and f"opening {exe}" in open(log).read():
+            return "Finder -> OmniLaunch.app -> omnilaunch run --gui " + exe
+        time.sleep(2)
+    raise AssertionError("OmniLaunch didn't receive the file. Log: " +
+                         (open(log).read()[-500:] if os.path.exists(log) else "(no log)"))
 
 
 def mac_dmg_install():
@@ -115,6 +133,7 @@ if runners.HOST_OS == "macos":
         provision.WINE_RELEASES_API, [r"^wine-stable.*\.tar\.xz$", r"^wine-devel.*\.tar\.xz$"]))
     check("finds the XQuartz installer", lambda: github_asset(provision.XQUARTZ_RELEASES_API, [r"^XQuartz-[\d.]+\.pkg$"]))
     check("double-click: builds and registers OmniLaunch.app", mac_double_click)
+    check("double-click: opening a .exe launches OmniLaunch", mac_double_click_opens_omnilaunch)
     check("installs an app from a .dmg", mac_dmg_install)
 if runners.HOST_OS == "linux":
     check("finds umu-launcher (Proton) download", lambda: github_asset(

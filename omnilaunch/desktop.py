@@ -217,31 +217,6 @@ MAC_TYPES = [   # declared so macOS knows these file types even if nothing else 
 # Finder starts apps with a minimal PATH; add the usual places Homebrew, OrbStack and XQuartz live.
 MAC_PATH = "/opt/homebrew/bin:/usr/local/bin:$HOME/.orbstack/bin:/opt/X11/bin:$PATH"
 
-# JavaScript for Automation: make OmniLaunch.app the default for each extension, then report the result.
-SET_DEFAULTS_JXA = r"""
-ObjC.import('AppKit');
-ObjC.import('UniformTypeIdentifiers');
-function run(argv) {
-  var app = $.NSURL.fileURLWithPath(argv[0]);
-  var ws = $.NSWorkspace.sharedWorkspace;
-  var setDefaults = argv[1] === "set";
-  for (var i = 2; setDefaults && i < argv.length; i++) {
-    var t = $.UTType.typeWithFilenameExtension(argv[i]);
-    if (!t || t.isNil()) continue;
-    ws.setDefaultApplicationAtURLToOpenContentTypeCompletionHandler(app, t, null);
-  }
-  if (setDefaults) delay(3);
-  var out = [];
-  for (var j = 2; j < argv.length; j++) {
-    var u = $.UTType.typeWithFilenameExtension(argv[j]);
-    var h = (u && !u.isNil()) ? ws.URLForApplicationToOpenContentType(u) : null;
-    out.push(argv[j] + "=" + ((h && !h.isNil()) ? h.path.js : "none"));
-  }
-  return out.join("\n");
-}
-"""
-
-
 def _applescript_string(text: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -300,11 +275,60 @@ def mac_info_plist_updates(plist: dict) -> dict:
     return plist
 
 
+def _launch_services():
+    """macOS LaunchServices calls (via ctypes) for reading and setting the default app per file type."""
+    import ctypes
+    cf = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    cs = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreServices.framework/CoreServices")
+    vp = ctypes.c_void_p
+    cf.CFStringCreateWithCString.restype = vp
+    cf.CFStringCreateWithCString.argtypes = [vp, ctypes.c_char_p, ctypes.c_uint32]
+    cf.CFStringGetCString.restype = ctypes.c_bool
+    cf.CFStringGetCString.argtypes = [vp, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+    cf.CFRelease.argtypes = [vp]
+    cs.UTTypeCreatePreferredIdentifierForTag.restype = vp
+    cs.UTTypeCreatePreferredIdentifierForTag.argtypes = [vp, vp, vp]
+    cs.LSSetDefaultRoleHandlerForContentType.restype = ctypes.c_int32
+    cs.LSSetDefaultRoleHandlerForContentType.argtypes = [vp, ctypes.c_uint32, vp]
+    cs.LSCopyDefaultRoleHandlerForContentType.restype = vp
+    cs.LSCopyDefaultRoleHandlerForContentType.argtypes = [vp, ctypes.c_uint32]
+    utf8 = 0x08000100
+
+    def cfstr(text):
+        return cf.CFStringCreateWithCString(None, text.encode("utf-8"), utf8)
+
+    def pystr(ref):
+        if not ref:
+            return ""
+        buf = ctypes.create_string_buffer(1024)
+        ok = cf.CFStringGetCString(ref, buf, len(buf), utf8)
+        cf.CFRelease(ref)
+        return buf.value.decode("utf-8") if ok else ""
+
+    return cf, cs, cfstr, pystr
+
+
 def mac_default_handlers(set_defaults: bool = False) -> dict:
-    """Which app opens each file type OmniLaunch handles; optionally make OmniLaunch the default first."""
-    r = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-e", SET_DEFAULTS_JXA, MAC_APP,
-                        "set" if set_defaults else "get", *MAC_EXTENSIONS], capture_output=True, text=True)
-    return dict(line.partition("=")[::2] for line in (r.stdout or "").strip().splitlines() if "=" in line)
+    """{extension: bundle id of the app that opens it}; optionally make OmniLaunch the default first.
+    Raises RuntimeError with the reason if macOS refuses."""
+    _cf, cs, cfstr, pystr = _launch_services()
+    roles_all = 0xFFFFFFFF
+    tag_class = cfstr("public.filename-extension")
+    result, errors = {}, []
+    for ext in MAC_EXTENSIONS:
+        uti_ref = cs.UTTypeCreatePreferredIdentifierForTag(tag_class, cfstr(ext), None)
+        uti = pystr(uti_ref)
+        if not uti:
+            errors.append(f".{ext}: macOS has no type for it")
+            continue
+        if set_defaults:
+            status = cs.LSSetDefaultRoleHandlerForContentType(cfstr(uti), roles_all, cfstr(MAC_BUNDLE_ID))
+            if status != 0:
+                errors.append(f".{ext} ({uti}): LaunchServices error {status}")
+        result[ext] = pystr(cs.LSCopyDefaultRoleHandlerForContentType(cfstr(uti), roles_all)) or "none"
+    if errors and not result:
+        raise RuntimeError("; ".join(errors))
+    return result
 
 
 def _integrate_macos(dry_run: bool) -> list:
@@ -333,8 +357,13 @@ def _integrate_macos(dry_run: bool) -> list:
     # Editing Info.plist breaks the applet's signature; re-sign it locally so macOS accepts it.
     subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", MAC_APP], check=False)
     subprocess.run([LSREGISTER, "-f", MAC_APP], check=False)
-    for ext, handler in mac_default_handlers(set_defaults=True).items():
-        ok = handler.rstrip("/") == MAC_APP.rstrip("/")
+    try:
+        handlers = mac_default_handlers(set_defaults=True)
+    except (OSError, RuntimeError) as e:
+        steps.append(f"couldn't set default apps automatically ({e}); use Get Info > Open with > Change All")
+        return steps
+    for ext, handler in handlers.items():
+        ok = handler.lower() == MAC_BUNDLE_ID
         steps.append(f".{ext}: " + ("opens with OmniLaunch" if ok else
                                     "not set yet: approve the macOS prompt, or use Get Info > Open with > Change All"))
     return steps
