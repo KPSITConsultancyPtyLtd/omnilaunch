@@ -5,8 +5,8 @@
 OmniLaunch is one app for **Windows**, **macOS** and **Linux** that opens apps made for the
 other systems as if they were native:
 
-- On a **Mac**, double-click a Windows `.exe`: it runs. Installers put their programs in
-  *Applications › OmniLaunch Apps*, where you open them like any Mac app.
+- On a **Mac**, double-click a Windows `.exe`: it runs. Programs that installers add appear
+  in *Applications › OmniLaunch Apps* and on your Desktop, and open like any Mac app.
 - On a **Linux PC**, run a game's Windows `.exe` launcher: it runs through Proton, the same
   technology Steam uses, without needing Steam.
 - On **Windows** (or a Mac, or Linux), double-click an Android `.apk`: it's installed and opened.
@@ -55,6 +55,8 @@ omnilaunch info <app>                      # what platform/CPU it was built for,
 omnilaunch doctor                          # what's installed, what's missing
 omnilaunch setup                           # list helpers; `setup <name>` or `setup all` installs
 omnilaunch envs list                       # per-app environments (size, last used)
+omnilaunch apps scan                       # make apps (+ Desktop shortcuts) for installed programs
+omnilaunch apps list                       # the apps OmniLaunch has made
 omnilaunch run  --env wine/setup-1a2b ./x.exe   # run inside an existing environment
 omnilaunch run  --runner vm ./app.exe      # force a layer: native, wine, proton, darling,
                                            #   container, wsl, vm, android
@@ -82,8 +84,10 @@ password prompt when admin rights are needed, and shows errors as alerts.
 ### How installers become native apps
 
 When a Windows installer finishes, OmniLaunch reads the Start Menu shortcuts it created and
-adds each program to *Applications › OmniLaunch Apps* (Mac) or your app menu (Linux).
-Opening one runs it in the environment it was installed into. On a Mac, opening a `.dmg`
+adds each program to *Applications › OmniLaunch Apps* (Mac; also in Launchpad and Spotlight)
+or your app menu (Linux), plus a shortcut on your Desktop. Opening one runs it in the
+environment it was installed into. For programs installed before this existed, run
+`omnilaunch apps scan`. On a Mac, opening a `.dmg`
 copies its app into Applications and opens it, and a `.pkg` opens Apple's Installer.
 
 ### Settings (environment variables)
@@ -94,6 +98,7 @@ copies its app into Applications and opens it, and a `.pkg` opens Apple's Instal
 | `OMNILAUNCH_PROTON` | A specific Proton build to use (path to its `proton` script) |
 | `OMNILAUNCH_GAMEID` | umu game ID, so Proton applies that game's fixes (default `0`) |
 | `OMNILAUNCH_LINUX_IMAGE` | Container image for Linux apps (default `debian:stable-slim`) |
+| `OMNILAUNCH_DESKTOP_SHORTCUTS` | Set to `0` to stop adding Desktop shortcuts for installed programs |
 
 ## How close to "native" is it?
 

@@ -55,8 +55,10 @@ Expect: VLC is copied into Applications and opens.
 
 Double-click it again later: it opens straight away.
 
-**If you used an installer (like 7-Zip):** finish the installer, then open
-*Applications > OmniLaunch Apps*: the installed program is there, and opens like a Mac app.
+**If you used an installer (like 7-Zip):** finish the installer. The installed program then
+appears on your **Desktop** and in **Applications > OmniLaunch Apps** (also in Launchpad and
+Spotlight), and opens like a Mac app. Installed something before this feature existed? Run
+`./bin/omnilaunch apps scan` once.
 
 If anything goes wrong, OmniLaunch shows an alert. Its log is at
 `~/Library/Application Support/OmniLaunch/omnilaunch.log`, which is useful to send me.

@@ -45,6 +45,13 @@ def main(argv: list[str] | None = None) -> int:
     rm = esub.add_parser("remove", help="delete an environment (the app's settings and data inside it)")
     rm.add_argument("name", help="name as shown by 'envs list', e.g. wine/notepad-1a2b3c4d")
 
+    ap = sub.add_parser("apps", help="Windows programs installed through OmniLaunch, as apps on this computer")
+    asub = ap.add_subparsers(dest="apps_cmd")
+    asub.add_parser("list", help="list the launchers OmniLaunch has created")
+    asc = asub.add_parser("scan", help="create launchers (and Desktop shortcuts) for installed programs")
+    asc.add_argument("env", nargs="?", help="one environment (see `envs list`); default: all of them")
+    asc.add_argument("--no-desktop", action="store_true", help="don't put shortcuts on the Desktop")
+
     st = sub.add_parser("setup", help="install the helpers OmniLaunch uses (Wine, WSL, containers, ...)")
     st.add_argument("component", nargs="?", help="what to set up, or 'all'; leave out to see the list")
     st.add_argument("--dry-run", action="store_true", help="show the steps without doing them")
@@ -88,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         return _integrate(ns)
     if ns.cmd == "setup":
         return _setup(ns)
+    if ns.cmd == "apps":
+        return _apps(ns, ap)
     if ns.cmd == "vm":
         return _vm(ns, vm)
     p.print_help()
@@ -239,6 +248,8 @@ def _run_windows_app(lp, env: dict, gui: bool) -> int:
     added = shortcuts.add_new_programs(lp.prefix, env_name, before)
     if added:
         where = "Applications > OmniLaunch Apps" if runners.HOST_OS == "macos" else "your app menu"
+        if shortcuts.desktop_shortcuts_enabled() and shortcuts.desktop_dir():
+            where += " and on your Desktop"
         msg = f"Installed {', '.join(added)}. Find it in {where}."
         print(f"[omnilaunch] {msg}", file=sys.stderr)
         if gui:
@@ -365,6 +376,43 @@ def _setup(ns: argparse.Namespace) -> int:
             print(f"{name}: setup failed: {e}", file=sys.stderr)
             code = 1
     return code
+
+
+def _apps(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from . import shortcuts
+    if ns.apps_cmd == "list":
+        items = shortcuts.list_launchers()
+        if not items:
+            print("No apps yet. Programs you install with OmniLaunch appear here.")
+        for path in items:
+            print(path)
+        return 0
+    if ns.apps_cmd != "scan":
+        parser.print_help()
+        return 0
+    windows_envs = [e for e in envs.list_envs() if e.name.split("/")[0] in ("wine", "proton")]
+    if ns.env:
+        windows_envs = [e for e in windows_envs if e.name == ns.env.strip("/")]
+        if not windows_envs:
+            print(f"error: no Windows environment called '{ns.env}'. See: omnilaunch envs list", file=sys.stderr)
+            return 2
+    total = 0
+    for e in windows_envs:
+        added, skipped = shortcuts.scan(e.path, e.name, desktop=not ns.no_desktop)
+        if not added and not skipped:
+            continue
+        print(f"{e.name}:")
+        for name in added:
+            print(f"  + {name}")
+        for name, why in skipped:
+            print(f"  - skipped {name}: {why}")
+        total += len(added)
+    if total:
+        print(f"\nAdded {total} app(s) to {shortcuts.launcher_dir()}" +
+              ("" if ns.no_desktop or not shortcuts.desktop_shortcuts_enabled() else " and your Desktop") + ".")
+    else:
+        print("No installed programs found in the Start Menu of any environment.")
+    return 0
 
 
 def _vm(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:

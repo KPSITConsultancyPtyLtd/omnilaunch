@@ -60,8 +60,10 @@ class TmpCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.d = self.tmp.name
+        os.makedirs(os.path.join(self.d, "Desktop"))
         patcher = mock.patch.dict(os.environ, {"OMNILAUNCH_HOME": os.path.join(self.d, "home"),
-                                               "XDG_DATA_HOME": os.path.join(self.d, "xdg")})
+                                               "XDG_DATA_HOME": os.path.join(self.d, "xdg"),
+                                               "XDG_DESKTOP_DIR": os.path.join(self.d, "Desktop")})
         patcher.start()
         os.environ.pop("OMNILAUNCH_PROTON", None)
         self.addCleanup(patcher.stop)

@@ -130,17 +130,64 @@ def _launcher_parts() -> list:
 
 
 def launcher_dir() -> str:
+    """Where launchers go: the Mac's main Applications folder (what Finder's sidebar, Launchpad and
+    Spotlight show), or the Linux app menu."""
     if runners.HOST_OS == "macos":
+        if os.access("/Applications", os.W_OK):
+            return "/Applications/OmniLaunch Apps"
         return os.path.expanduser("~/Applications/OmniLaunch Apps")
     base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
     return os.path.join(base, "applications")
+
+
+def desktop_dir() -> str | None:
+    if os.environ.get("XDG_DESKTOP_DIR"):
+        return os.path.expanduser(os.environ["XDG_DESKTOP_DIR"])
+    if runners.HOST_OS == "linux" and runners.which("xdg-user-dir"):
+        try:
+            out = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True, text=True, timeout=5).stdout.strip()
+            if out and out != os.path.expanduser("~"):
+                return out
+        except (OSError, subprocess.SubprocessError):
+            pass
+    desktop = os.path.expanduser("~/Desktop")
+    return desktop if os.path.isdir(desktop) else None
+
+
+def desktop_shortcuts_enabled() -> bool:
+    return os.environ.get("OMNILAUNCH_DESKTOP_SHORTCUTS", "1") != "0"
 
 
 def _safe_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "App"
 
 
-def create_launcher(name: str, env_name: str, target: str, args: str = "") -> str:
+def _put_on_desktop(launcher: str, name: str) -> str | None:
+    """Add a Desktop shortcut pointing at the launcher. Returns its path, or None if not possible."""
+    desk = desktop_dir()
+    if not desk:
+        return None
+    try:
+        if runners.HOST_OS == "macos":
+            link = os.path.join(desk, _safe_name(name) + ".app")
+            if os.path.islink(link):
+                os.unlink(link)
+            elif os.path.exists(link):
+                return link   # something real with that name is already there: leave it alone
+            os.symlink(launcher, link)   # Finder shows it like an alias; double-click opens the app
+            return link
+        dest = os.path.join(desk, os.path.basename(launcher))
+        with open(launcher) as src, open(dest, "w") as out:
+            out.write(src.read())
+        os.chmod(dest, 0o755)   # desktops only run launchers marked executable (and trusted)
+        if runners.which("gio"):
+            subprocess.run(["gio", "set", dest, "metadata::trusted", "true"], capture_output=True, check=False)
+        return dest
+    except OSError:
+        return None
+
+
+def create_launcher(name: str, env_name: str, target: str, args: str = "", desktop: bool = True) -> str:
     argv = [*_launcher_parts(), "run", "--gui", "--env", env_name, target]
     extra = shlex.split(args, posix=False) if args else []
     if runners.HOST_OS == "macos":
@@ -149,42 +196,74 @@ def create_launcher(name: str, env_name: str, target: str, args: str = "") -> st
         os.makedirs(launcher_dir(), exist_ok=True)
         cmd = 'export PATH="' + MAC_PATH + '"; ' + " ".join(shlex.quote(a) for a in argv + extra) + " >/dev/null 2>&1 &"
         script = f"on run\n\tdo shell script {_applescript_string(cmd)}\nend run\n"
+        if os.path.exists(app):
+            import shutil
+            shutil.rmtree(app)
         subprocess.run(["/usr/bin/osacompile", "-o", app, "-e", script], check=True, capture_output=True)
-        return app
-    from .desktop import _exec_quote
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "app"
-    path = os.path.join(launcher_dir(), f"omnilaunch-{slug}.desktop")
-    os.makedirs(launcher_dir(), exist_ok=True)
-    with open(path, "w") as f:
-        f.write("\n".join([
-            "[Desktop Entry]", "Type=Application", f"Name={name}",
-            "Comment=Windows app, opened with OmniLaunch",
-            "Exec=" + " ".join(_exec_quote(a) for a in argv + extra),
-            "Icon=application-x-ms-dos-executable", "Terminal=false", "Categories=Wine;", "",
-        ]))
+        path = app
+    else:
+        from .desktop import _exec_quote
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "app"
+        path = os.path.join(launcher_dir(), f"omnilaunch-{slug}.desktop")
+        os.makedirs(launcher_dir(), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("\n".join([
+                "[Desktop Entry]", "Type=Application", f"Name={name}",
+                "Comment=Windows app, opened with OmniLaunch",
+                "Exec=" + " ".join(_exec_quote(a) for a in argv + extra),
+                "Icon=application-x-ms-dos-executable", "Terminal=false", "Categories=Wine;", "",
+            ]))
+    if desktop and desktop_shortcuts_enabled():
+        _put_on_desktop(path, name)
     return path
 
 
-def add_new_programs(prefix: str, env_name: str, before: dict) -> list:
-    """Create launchers for shortcuts that appeared since `before`. Returns the program names added."""
-    added = []
+def scan(prefix: str, env_name: str, before: dict | None = None, desktop: bool = True):
+    """Create launchers for the programs in an environment's Start Menu (only new ones if `before`
+    is given). Returns (added names, [(shortcut name, reason skipped)])."""
+    added, skipped, seen = [], [], set()
     for path, mtime in sorted(find_shortcuts(prefix).items()):
-        if before.get(path) == mtime:
+        if before is not None and before.get(path) == mtime:
             continue
         name = os.path.splitext(os.path.basename(path))[0]
+        if name.lower() in seen:
+            continue
         if SKIP.search(name):
+            skipped.append((name, "looks like an uninstaller/readme/web link"))
             continue
         try:
             with open(path, "rb") as f:
                 link = parse_lnk(f.read())
-        except (OSError, ValueError, struct.error, IndexError):
+        except (OSError, ValueError, struct.error, IndexError) as e:
+            skipped.append((name, f"couldn't read the shortcut ({e})"))
             continue
         target = to_prefix_path(prefix, link["target"])
-        if not target or not target.lower().endswith((".exe", ".bat", ".msi")):
+        if not target:
+            skipped.append((name, f"its target {link['target'] or '(empty)'} isn't on this environment's C: drive"))
+            continue
+        if not target.lower().endswith((".exe", ".bat", ".msi")):
+            skipped.append((name, "it doesn't point at a program"))
             continue
         try:
-            create_launcher(name, env_name, target, link["args"])
-        except (OSError, subprocess.CalledProcessError):
+            create_launcher(name, env_name, target, link["args"], desktop=desktop)
+        except (OSError, subprocess.CalledProcessError) as e:
+            skipped.append((name, f"couldn't create the launcher ({e})"))
             continue
+        seen.add(name.lower())
         added.append(name)
-    return added
+    return added, skipped
+
+
+def add_new_programs(prefix: str, env_name: str, before: dict) -> list:
+    """Create launchers for shortcuts that appeared since `before`. Returns the program names added."""
+    return scan(prefix, env_name, before)[0]
+
+
+def list_launchers() -> list:
+    folder = launcher_dir()
+    if not os.path.isdir(folder):
+        return []
+    if runners.HOST_OS == "macos":
+        return sorted(os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".app"))
+    return sorted(os.path.join(folder, n) for n in os.listdir(folder)
+                  if n.startswith("omnilaunch-") and n.endswith(".desktop"))

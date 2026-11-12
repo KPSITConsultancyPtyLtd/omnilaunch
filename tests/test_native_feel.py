@@ -201,6 +201,48 @@ class ShortcutTests(TmpCase):
             text = f.read()
         self.assertIn("Name=Foo App", text)
         self.assertIn("run --gui --env wine/setup-1", text)
+        desk = os.path.join(self.d, "Desktop", "omnilaunch-foo-app.desktop")
+        self.assertTrue(os.path.exists(desk))
+        if os.name != "nt":
+            self.assertTrue(os.access(desk, os.X_OK))
+
+    def test_apps_scan_repairs_existing_install_and_explains_skips(self):
+        root = self.prefix()
+        menu = os.path.join(root, "drive_c", "ProgramData", "Microsoft", "Windows", "Start Menu", "Programs", "Foo")
+        _write(menu, "Foo App.lnk", make_lnk("C:\\Program Files\\Foo App\\foo.exe"))
+        _write(menu, "Gone.lnk", make_lnk("C:\\Program Files\\Gone\\gone.exe"))
+        envs_meta = os.path.join(root, "omnilaunch.json")
+        open(envs_meta, "w").write('{"app": "/x/setup.exe", "last_used": 1}')
+        code, out = quiet(cli.main, ["apps", "scan", "--no-desktop"])
+        self.assertEqual(code, 0)
+        self.assertIn("+ Foo App", out)
+        self.assertIn("skipped Gone", out)
+        self.assertFalse(os.listdir(os.path.join(self.d, "Desktop")))
+        code, out = quiet(cli.main, ["apps", "list"])
+        self.assertIn("omnilaunch-foo-app.desktop", out)
+
+    def test_desktop_shortcuts_can_be_turned_off(self):
+        root = self.prefix()
+        exe = os.path.join(root, "drive_c", "Program Files", "Foo App", "foo.exe")
+        with mock.patch.dict(os.environ, {"OMNILAUNCH_DESKTOP_SHORTCUTS": "0"}):
+            shortcuts.create_launcher("Foo", "wine/setup-1", exe)
+        self.assertFalse(os.listdir(os.path.join(self.d, "Desktop")))
+
+    @unittest.skipIf(os.name == "nt", "symlinks need special rights on Windows")
+    def test_mac_launcher_goes_to_main_applications_and_desktop(self):
+        self.host("macos", "arm64")
+        apps = os.path.join(self.d, "Applications", "OmniLaunch Apps")
+
+        def fake_osacompile(argv, **kw):
+            os.makedirs(argv[argv.index("-o") + 1])
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(shortcuts, "launcher_dir", return_value=apps), \
+                mock.patch.object(shortcuts.subprocess, "run", side_effect=fake_osacompile):
+            app = shortcuts.create_launcher("7-Zip File Manager", "wine/7z-1", "/x/7zFM.exe")
+        self.assertEqual(app, os.path.join(apps, "7-Zip File Manager.app"))
+        link = os.path.join(self.d, "Desktop", "7-Zip File Manager.app")
+        self.assertEqual(os.readlink(link), app)
 
     def test_run_with_env_reuses_environment(self):
         root = self.prefix()

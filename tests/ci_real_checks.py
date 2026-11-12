@@ -89,6 +89,18 @@ def mac_double_click_opens_omnilaunch():
                          (open(log).read()[-500:] if os.path.exists(log) else "(no log)"))
 
 
+def mac_installed_program_launcher():
+    """A program installed in a Windows environment gets a real app in /Applications and on the Desktop."""
+    from omnilaunch import shortcuts
+    os.makedirs(os.path.expanduser("~/Desktop"), exist_ok=True)
+    app = shortcuts.create_launcher("OmniLaunch CI Test", "wine/ci-test", "/tmp/ci/foo.exe")
+    assert app.startswith(shortcuts.launcher_dir()) and os.path.isdir(app), app
+    subprocess.run(["/usr/bin/plutil", "-lint", os.path.join(app, "Contents", "Info.plist")], check=True)
+    link = os.path.expanduser("~/Desktop/OmniLaunch CI Test.app")
+    assert os.path.islink(link) and os.readlink(link) == app, link
+    return f"{app} (+ Desktop shortcut)"
+
+
 def mac_dmg_install():
     work = tempfile.mkdtemp()
     app = os.path.join(work, "src", "OmniTest.app")
@@ -135,6 +147,7 @@ if runners.HOST_OS == "macos":
     check("finds the XQuartz installer", lambda: github_asset(provision.XQUARTZ_RELEASES_API, [r"^XQuartz-[\d.]+\.pkg$"]))
     check("double-click: builds and registers OmniLaunch.app", mac_double_click)
     check("double-click: opening a .exe launches OmniLaunch", mac_double_click_opens_omnilaunch)
+    check("installed programs get an app in Applications and on the Desktop", mac_installed_program_launcher)
     check("installs an app from a .dmg", mac_dmg_install)
 if runners.HOST_OS == "linux":
     check("finds umu-launcher (Proton) download", lambda: github_asset(
