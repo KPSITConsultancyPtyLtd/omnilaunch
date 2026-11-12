@@ -199,6 +199,13 @@ def unintegrate() -> bool:
 
 def notify(title: str, body: str) -> None:
     """Show a desktop notification (used when launched by double-click, with no terminal)."""
+    try:
+        _notify(title, body)
+    except Exception:
+        pass   # a notification failing must never hide the real error
+
+
+def _notify(title: str, body: str) -> None:
     if runners.HOST_OS == "macos":
         # Pass text as arguments rather than splicing it into the script, so quotes can't break it.
         script = ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)",

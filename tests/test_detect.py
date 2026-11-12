@@ -258,7 +258,7 @@ class MacHostTests(TmpCase):
         with mock.patch.object(runners, "rosetta_installed", return_value=False):
             with self.assertRaises(runners.UnsupportedApp) as cm:
                 runners.plan(app)
-        self.assertIn("install-rosetta", cm.exception.hint)
+        self.assertEqual(cm.exception.needs, "rosetta")
         with mock.patch.object(runners, "rosetta_installed", return_value=True):
             self.assertIn("Rosetta", " ".join(runners.plan(app).notes))
 
@@ -371,6 +371,10 @@ class WindowsHostTests(TmpCase):
     def setUp(self):
         super().setUp()
         self.host("windows", "x86_64")
+        self.real_wsl_distros = runners.wsl_distros
+        p = mock.patch.object(runners, "wsl_distros", return_value=["Ubuntu"])
+        p.start()
+        self.addCleanup(p.stop)
 
     def test_exe_runs_natively(self):
         lp = runners.plan(detect(_write(self.d, "app.exe", fake_pe())), ["/s"])
@@ -442,7 +446,7 @@ class WindowsHostTests(TmpCase):
         self.with_tools("wsl")
         out = "Ubuntu\r\nDebian\r\n".encode("utf-16-le")
         with mock.patch.object(runners.subprocess, "run", return_value=mock.Mock(stdout=out)):
-            self.assertEqual(runners.wsl_distros(), ["Ubuntu", "Debian"])
+            self.assertEqual(self.real_wsl_distros(), ["Ubuntu", "Debian"])
 
     def test_windows_data_dir(self):
         with mock.patch.dict(os.environ, {"LOCALAPPDATA": os.path.join(self.d, "Local")}):

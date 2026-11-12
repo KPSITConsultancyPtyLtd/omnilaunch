@@ -27,6 +27,7 @@ class AppInfo:
     kind: str = ""       # e.g. "ELF executable", "PE32+ (GUI)", "Mach-O universal"
     archs: tuple = ()    # all architectures in a universal (fat) Mac binary
     interpreter: str = ""  # shebang line for scripts, e.g. "/usr/bin/env python3"
+    gui: bool = False      # Linux apps: does it open windows (links X11/GTK/Qt/Wayland/SDL)?
 
 
 ELF_MACHINES = {0x03: "x86", 0x3E: "x86_64", 0x28: "arm", 0xB7: "arm64", 0xF3: "riscv"}
@@ -100,7 +101,22 @@ def _elf(path: str, head: bytes) -> AppInfo:
     # AppImages are ELF files with an "AI" marker at offset 8.
     if head[8:10] == b"AI":
         kind = "AppImage"
-    return AppInfo(path, path, Platform.LINUX, ELF_MACHINES.get(machine, hex(machine)), kind)
+    gui = kind == "AppImage" or _links_gui_libraries(path)
+    return AppInfo(path, path, Platform.LINUX, ELF_MACHINES.get(machine, hex(machine)), kind, gui=gui)
+
+
+GUI_LIBRARIES = (b"libX11.so", b"libxcb.so", b"libgtk-", b"libQt5", b"libQt6", b"libwayland-client",
+                 b"libSDL2", b"libGL.so", b"libEGL.so", b"libvulkan.so")
+
+
+def _links_gui_libraries(path: str, limit: int = 8 * 1024 * 1024) -> bool:
+    """Cheap check: GUI apps name their windowing libraries in the binary's dynamic section."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(limit)
+    except OSError:
+        return False
+    return any(lib in data for lib in GUI_LIBRARIES)
 
 
 def _pe(path: str, head: bytes) -> AppInfo:

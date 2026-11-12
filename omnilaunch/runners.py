@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from .detect import AppInfo, Platform
 
-RUNNERS = ("native", "wine", "proton", "darling", "container", "wsl")
+RUNNERS = ("native", "wine", "proton", "darling", "container", "wsl", "vm")
 
 HOST_OS = {"darwin": "macos", "linux": "linux", "win32": "windows", "cygwin": "windows"}.get(
     sys.platform, "linux" if sys.platform.startswith("linux") else sys.platform)
@@ -70,9 +70,10 @@ def data_dir() -> str:
 class UnsupportedApp(Exception):
     """Raised with a human-friendly explanation and a fix, when we can't run something."""
 
-    def __init__(self, message: str, hint: str = ""):
+    def __init__(self, message: str, hint: str = "", needs: str = ""):
         super().__init__(message)
         self.hint = hint
+        self.needs = needs   # name of a provision component that would fix this, if any
 
 
 @dataclass
@@ -83,6 +84,7 @@ class LaunchPlan:
     notes: list[str] = field(default_factory=list)
     cwd: str | None = None
     prefix: str | None = None   # isolated environment directory, created before launch
+    pre: list = field(default_factory=list)   # (argv, required) commands to run before launching
 
 
 def which(*names: str) -> str | None:
@@ -139,6 +141,25 @@ def to_wsl_path(path: str) -> str:
     return path.replace("\\", "/")
 
 
+XQUARTZ_APP = "/Applications/Utilities/XQuartz.app"
+LINUX_GUI_IMAGE = "omnilaunch/linux-gui"
+
+
+def xquartz_installed() -> bool:
+    return HOST_OS == "macos" and os.path.isdir(XQUARTZ_APP)
+
+
+def linux_gui_image_ready() -> bool:
+    engine = find_container_engine()
+    if not engine:
+        return False
+    try:
+        return subprocess.run([engine, "image", "inspect", LINUX_GUI_IMAGE], capture_output=True,
+                              timeout=20).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def rosetta_installed() -> bool:
     if HOST_OS != "macos" or HOST_ARCH != "arm64":
         return False
@@ -166,7 +187,10 @@ def default_runner(info: AppInfo) -> str:
             return "native"   # explained as unsupported by _windows_native
         return "wsl" if find_wsl() or not find_container_engine() else "container"
     if info.platform == Platform.WINDOWS:
-        return "proton" if os.environ.get("OMNILAUNCH_PROTON") and HOST_OS == "linux" else "wine"
+        if os.environ.get("OMNILAUNCH_PROTON") and HOST_OS == "linux":
+            return "proton"
+        from . import vms
+        return "vm" if not find_wine() and vms.get("windows") else "wine"
     if info.platform == Platform.SCRIPT:
         return "native"
     if HOST_OS == "macos":
@@ -204,6 +228,8 @@ def plan(info: AppInfo, args: list[str] | None = None, runner: str | None = None
         lp = _container(info, args)
     elif target == "wsl":
         lp = _wsl(info, args)
+    elif target == "vm":
+        lp = _vm(info, args)
     else:
         lp = _darling(info, args)
     if lp.cwd is None:
@@ -254,7 +280,7 @@ def _darling(info: AppInfo, args: list[str]) -> LaunchPlan:
         raise UnsupportedApp(
             "This is a macOS app. On Linux, Mac apps can only run via Darling, which isn't installed.",
             "See https://www.darlinghq.org. Note: Darling mainly supports command-line Mac tools; "
-            "most graphical Mac apps (Cocoa/Metal) won't run yet.")
+            "most graphical Mac apps (Cocoa/Metal) won't run yet.", needs="darling")
     if info.archs and "x86_64" not in info.archs:
         raise UnsupportedApp(
             f"{os.path.basename(info.path)} is built only for {', '.join(info.archs)} (Apple Silicon).",
@@ -281,7 +307,7 @@ def _mac_native(info: AppInfo, args: list[str]) -> LaunchPlan:
         if HOST_ARCH == "arm64" and "x86_64" in archs:
             if not rosetta_installed():
                 raise UnsupportedApp("This is an Intel Mac app and Rosetta 2 isn't installed.",
-                                     "Run: softwareupdate --install-rosetta --agree-to-license")
+                                     "Run: omnilaunch setup rosetta", needs="rosetta")
             notes.append("Intel app: running through Rosetta 2.")
         else:
             raise UnsupportedApp(f"This Mac app is built for {', '.join(sorted(archs))}, "
@@ -306,7 +332,8 @@ def _container(info: AppInfo, args: list[str]) -> LaunchPlan:
                          "then start it.",
                 "windows": "Install WSL instead (run `wsl --install` in an admin terminal), "
                            "or Docker Desktop / Podman Desktop."}.get(HOST_OS, "Install docker or podman.")
-        raise UnsupportedApp("Linux apps need a container engine on this machine, and none was found.", hint)
+        raise UnsupportedApp("Linux apps need a container engine on this machine, and none was found.", hint,
+                             needs="" if HOST_OS == "windows" else "container")
     if HOST_OS != "windows":   # Windows filesystems have no executable flag
         _require_exec(info)
     folder = os.path.dirname(info.executable)
@@ -320,14 +347,53 @@ def _container(info: AppInfo, args: list[str]) -> LaunchPlan:
     arch = info.arch if info.arch in CONTAINER_PLATFORMS else HOST_ARCH
     argv += ["--platform", CONTAINER_PLATFORMS.get(arch, "linux/amd64"),
              "-v", f"{folder}:{guest_folder}", "-w", guest_folder]
-    notes = [f"Running in a {image} container ({os.path.basename(engine)}); the app sees only its own folder.",
-             "Command-line Linux apps only: graphical Linux apps need an X11/Wayland setup."]
     if info.kind == "AppImage":
         argv += ["-e", "APPIMAGE_EXTRACT_AND_RUN=1"]
+    pre = []
+    if info.gui:
+        gui_argv, image, pre = _container_display(engine)
+        argv += gui_argv
+    notes = [f"Running in a {image} container ({os.path.basename(engine)}); the app sees only its own folder."]
+    if info.gui:
+        notes.append("Graphical app: its windows are shown on this computer's screen.")
     if HOST_OS != "linux" and info.arch not in ("unknown", HOST_ARCH) and info.arch in CONTAINER_PLATFORMS:
         notes.append(f"{info.arch} Linux app on an {HOST_ARCH} machine: emulated, so slower.")
     argv += [image, guest_exe, *args]
-    return LaunchPlan(f"container ({os.path.basename(engine)})", argv, notes=notes)
+    return LaunchPlan(f"container ({os.path.basename(engine)})", argv, notes=notes, pre=pre)
+
+
+def _container_display(engine: str):
+    """Extra container arguments, image and pre-launch steps so a Linux GUI app can show windows."""
+    image = LINUX_GUI_IMAGE if linux_gui_image_ready() else os.environ.get(
+        "OMNILAUNCH_LINUX_IMAGE", DEFAULT_LINUX_IMAGE)
+    if HOST_OS == "macos":
+        if not xquartz_installed():
+            raise UnsupportedApp("This Linux app has windows, and showing them on a Mac needs XQuartz.",
+                                 "Run: omnilaunch setup linux-gui", needs="linux-gui")
+        if image != LINUX_GUI_IMAGE:
+            raise UnsupportedApp("Graphical Linux apps need OmniLaunch's Linux GUI image, which isn't built yet.",
+                                 "Run: omnilaunch setup linux-gui", needs="linux-gui")
+        host = "host.containers.internal" if os.path.basename(engine).startswith("podman") else "host.docker.internal"
+        xhost = "/opt/X11/bin/xhost" if os.path.exists("/opt/X11/bin/xhost") else "xhost"
+        pre = [(["/usr/bin/open", "-a", "XQuartz"], False),
+               ([xhost, "+localhost"], False), ([xhost, "+127.0.0.1"], False)]
+        return ["-e", f"DISPLAY={host}:0"], image, pre
+    if HOST_OS == "linux":
+        display = os.environ.get("DISPLAY", ":0")
+        pre = [(["xhost", "+local:"], False)] if which("xhost") else []   # let local containers draw windows
+        return ["-e", f"DISPLAY={display}", "-v", "/tmp/.X11-unix:/tmp/.X11-unix"], image, pre
+    raise UnsupportedApp("Graphical Linux apps on Windows run through WSL, not a container.", "Use --runner wsl.")
+
+
+def _vm(info: AppInfo, args: list[str]) -> LaunchPlan:
+    if info.platform not in (Platform.WINDOWS, Platform.UNKNOWN):
+        raise UnsupportedApp("Virtual machines are only set up for Windows apps so far.")
+    if HOST_OS == "windows":
+        raise UnsupportedApp("This is Windows already: Windows apps run natively.", "Use --runner native.")
+    if "DLL" in info.kind:
+        raise UnsupportedApp(f"{os.path.basename(info.path)} is a Windows library (DLL), not an app.")
+    from . import vms
+    return vms.plan_windows_app(info, args)
 
 
 # ---------------------------------------------------------------- Windows host
@@ -364,9 +430,9 @@ def _wsl(info: AppInfo, args: list[str]) -> LaunchPlan:
     if info.platform not in (Platform.LINUX, Platform.SCRIPT, Platform.UNKNOWN):
         raise UnsupportedApp("WSL runs Linux apps only.")
     wsl = find_wsl()
-    if not wsl:
-        raise UnsupportedApp("Linux apps on Windows need WSL, which isn't installed.",
-                             "Run `wsl --install` in an administrator terminal, then restart.")
+    if not wsl or not wsl_distros():
+        raise UnsupportedApp("Linux apps on Windows need WSL with a Linux distribution, which isn't set up.",
+                             "Run: omnilaunch setup wsl (or `wsl --install`), then restart.", needs="wsl")
     guest_exe = to_wsl_path(info.executable)
     guest_dir = to_wsl_path(os.path.dirname(info.executable))
     notes = ["Running in WSL. On Windows 11, graphical Linux apps open in their own windows (WSLg)."]
@@ -416,7 +482,9 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool) -> Laun
 
     wine = find_wine()
     if not wine:
-        raise UnsupportedApp("This is a Windows app and Wine isn't installed.", _wine_hint())
+        from . import vms
+        hint = _wine_hint() + (" Or use --runner vm." if vms.get("windows") else "")
+        raise UnsupportedApp("This is a Windows app and Wine isn't installed.", hint, needs="wine")
     if HOST_OS == "macos" and HOST_ARCH == "arm64" and not rosetta_installed():
         notes.append("Wine on Apple Silicon needs Rosetta 2: softwareupdate --install-rosetta --agree-to-license")
     env = {"WINEPREFIX": root}

@@ -8,11 +8,11 @@ import subprocess
 import sys
 import time
 
-from . import __version__, desktop, envs, runners
+from . import __version__, desktop, envs, provision, runners, vms
 from .detect import detect
 from .runners import RUNNERS, UnsupportedApp, plan, which
 
-RUN_FLAGS = {"--dry-run", "--verbose", "-v", "--notify"}
+RUN_FLAGS = {"--dry-run", "--verbose", "-v", "--notify", "--yes", "-y"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--runner", choices=RUNNERS, help="force a compatibility layer")
     run.add_argument("-v", "--verbose", action="store_true", help="show compatibility-layer debug output")
     run.add_argument("--notify", action="store_true", help="report errors as desktop notifications")
+    run.add_argument("-y", "--yes", action="store_true", help="install missing helpers without asking")
     run.add_argument("app")
     run.add_argument("args", nargs=argparse.REMAINDER)
 
@@ -40,6 +41,22 @@ def main(argv: list[str] | None = None) -> int:
     esub.add_parser("list", help="list environments")
     rm = esub.add_parser("remove", help="delete an environment (the app's settings and data inside it)")
     rm.add_argument("name", help="name as shown by 'envs list', e.g. wine/notepad-1a2b3c4d")
+
+    st = sub.add_parser("setup", help="install the helpers OmniLaunch uses (Wine, WSL, containers, ...)")
+    st.add_argument("component", nargs="?", help="what to set up, or 'all'; leave out to see the list")
+    st.add_argument("--dry-run", action="store_true", help="show the steps without doing them")
+
+    vm = sub.add_parser("vm", help="use a virtual machine for apps nothing else can run")
+    vsub = vm.add_subparsers(dest="vm_cmd")
+    vset = vsub.add_parser("set", help="tell OmniLaunch which VM to use")
+    vset.add_argument("os", choices=["windows"])
+    vset.add_argument("--tool", required=True, choices=list(vms.TOOLS))
+    vset.add_argument("--name", required=True, help="the VM's name in Parallels/VirtualBox")
+    vset.add_argument("--user", default="", help="VirtualBox: Windows account to run apps as")
+    vset.add_argument("--password-file", default="", help="VirtualBox: file containing that account's password")
+    vsub.add_parser("show", help="show the configured VMs")
+    vrm = vsub.add_parser("remove", help="stop using a VM")
+    vrm.add_argument("os", choices=["windows"])
 
     integ = sub.add_parser("integrate", help="make double-clicking Windows/Mac apps open with OmniLaunch")
     integ.add_argument("--dry-run", action="store_true")
@@ -66,6 +83,10 @@ def main(argv: list[str] | None = None) -> int:
         return _envs(ns, e)
     if ns.cmd == "integrate":
         return _integrate(ns)
+    if ns.cmd == "setup":
+        return _setup(ns)
+    if ns.cmd == "vm":
+        return _vm(ns, vm)
     p.print_help()
     return 0
 
@@ -79,7 +100,7 @@ def _absorb_trailing_flags(ns: argparse.Namespace) -> None:
             app_args.extend(args[i + 1:])
             break
         if a in RUN_FLAGS:
-            setattr(ns, {"-v": "verbose"}.get(a, a.lstrip("-").replace("-", "_")), True)
+            setattr(ns, {"-v": "verbose", "-y": "yes"}.get(a, a.lstrip("-").replace("-", "_")), True)
         elif a == "--runner" and i + 1 < len(args) and args[i + 1] in RUNNERS:
             ns.runner = args[i + 1]
             i += 1
@@ -104,6 +125,8 @@ def _info(app: str) -> int:
     arch = i.arch if not (i.arch == "universal" and i.archs) else f"universal ({', '.join(i.archs)})"
     print(f"Arch:      {arch}")
     print(f"Format:    {i.kind}")
+    if i.platform.value == "linux":
+        print(f"GUI:       {'yes (opens windows)' if i.gui else 'no (command-line app)'}")
     try:
         print(f"Runner:    {plan(i).runner}")
     except UnsupportedApp as e:
@@ -123,27 +146,47 @@ def _fail(msg: str, hint: str, notify: bool, code: int) -> int:
 
 
 def _run(ns: argparse.Namespace) -> int:
-    try:
-        info = detect(ns.app)
-        lp = plan(info, ns.args, runner=ns.runner, verbose=ns.verbose)
-    except FileNotFoundError:
-        return _fail(f"no such file: {ns.app}", "", ns.notify, 2)
-    except UnsupportedApp as e:
-        return _fail(str(e), e.hint, ns.notify, 3)
+    offered: set = set()
+    while True:
+        try:
+            info = detect(ns.app)
+            lp = plan(info, ns.args, runner=ns.runner, verbose=ns.verbose)
+            break
+        except FileNotFoundError:
+            return _fail(f"no such file: {ns.app}", "", ns.notify, 2)
+        except UnsupportedApp as e:
+            # A helper is missing: offer to install it, then try again (once per helper).
+            if e.needs and e.needs not in offered and not ns.dry_run and not ns.notify:
+                offered.add(e.needs)
+                if provision.offer(e.needs, assume_yes=ns.yes):
+                    continue
+            hint = e.hint
+            if e.needs and e.needs in provision.components():
+                hint = f"Run: omnilaunch setup {e.needs}"
+            return _fail(str(e), hint, ns.notify, 3)
 
     print(f"[omnilaunch] {info.platform.value} app ({info.kind}, {info.arch}) -> {lp.runner}", file=sys.stderr)
     for n in lp.notes:
         print(f"[omnilaunch] {n}", file=sys.stderr)
     if ns.dry_run:
+        for argv, _required in lp.pre:
+            print("before: " + _quote(argv))
         if lp.cwd:
-            print(f"cd {lp.cwd}")
+            print(f"cd {_quote([lp.cwd])}")
         for k, v in lp.env.items():
-            print(f"{k}={v}")
-        print(" ".join(lp.argv))
+            print(f"{k}={_quote([v])}")
+        print(_quote(lp.argv))
         return 0
 
     if lp.prefix:
         envs.record_launch(lp.prefix, info.path)
+    for argv, required in lp.pre:
+        try:
+            ok = subprocess.run(argv, capture_output=not required).returncode == 0
+        except OSError:
+            ok = False
+        if required and not ok:
+            return _fail(f"preparing the launch failed: {' '.join(argv)}", "", ns.notify, 4)
     env = {**os.environ, **lp.env}
     try:
         if os.name == "nt":
@@ -159,6 +202,12 @@ def _run(ns: argparse.Namespace) -> int:
     return 0  # unreachable
 
 
+def _quote(argv: list) -> str:
+    """Show a command the way this computer's shell would need it typed."""
+    import shlex
+    return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
+
+
 def _doctor() -> int:
     os_name = {"macos": "macOS"}.get(runners.HOST_OS, runners.HOST_OS.capitalize())
     print(f"OmniLaunch {__version__} - {os_name} on {runners.HOST_ARCH}, Python {sys.version.split()[0]}\n")
@@ -168,9 +217,7 @@ def _doctor() -> int:
     if runners.HOST_OS == "windows":
         distros = runners.wsl_distros()
         rows.append(("Windows apps", True, ""))
-        rows.append(("Linux apps (WSL)", bool(distros),
-                     "run `wsl --install` in an admin terminal" if not runners.find_wsl()
-                     else "WSL is present but has no Linux installed: run `wsl --install -d Ubuntu`"))
+        rows.append(("Linux apps (WSL)", bool(distros), "omnilaunch setup wsl"))
         rows.append(("Linux apps (container, alternative to WSL)", bool(engine),
                      "optional: Docker Desktop or Podman Desktop"))
         rows.append(("Mac apps", False, "not possible on Windows"))
@@ -181,16 +228,17 @@ def _doctor() -> int:
     elif runners.HOST_OS == "macos":
         rows.append(("Mac apps", True, ""))
         if runners.HOST_ARCH == "arm64":
-            rows.append(("Intel Mac apps (Rosetta 2)", runners.rosetta_installed(),
-                         "softwareupdate --install-rosetta --agree-to-license"))
-        rows.append(("Windows apps (Wine)", bool(wine),
-                     "download Wine Stable from github.com/Gcenx/macOS_Wine_builds"))
+            rows.append(("Intel Mac apps (Rosetta 2)", runners.rosetta_installed(), "omnilaunch setup rosetta"))
+        rows.append(("Windows apps (Wine)", bool(wine), "omnilaunch setup wine"))
         rows.append(("Linux command-line apps (container)", bool(engine),
-                     "install OrbStack, Docker Desktop or Podman, and start it"))
+                     "omnilaunch setup container"))
+        rows.append(("Linux graphical apps (XQuartz + GUI image)",
+                     runners.xquartz_installed() and runners.linux_gui_image_ready(),
+                     "omnilaunch setup linux-gui"))
     else:
         proton = os.environ.get("OMNILAUNCH_PROTON")
         rows.append(("Linux apps", True, ""))
-        rows.append(("Windows apps (Wine)", bool(wine), "install the 'wine' package"))
+        rows.append(("Windows apps (Wine)", bool(wine), "omnilaunch setup wine"))
         rows.append(("Windows games (Proton)", bool(proton and os.path.exists(proton)),
                      "set OMNILAUNCH_PROTON=/path/to/proton"))
         rows.append(("macOS apps (Darling)", bool(which("darling")), "see https://www.darlinghq.org"))
@@ -202,6 +250,14 @@ def _doctor() -> int:
                      "run: omnilaunch integrate"))
     for label, ok, fix in rows:
         print(f"  [{'OK ' if ok else '-- '}] {label}" + ("" if ok else f"  ({fix})"))
+    cfg = vms.get("windows")
+    if runners.HOST_OS != "windows":
+        rows_vm = ("Windows VM fallback", bool(cfg and vms.find_tool(cfg.tool)),
+                   "optional: omnilaunch vm set windows --tool parallels|virtualbox --name ...")
+        print(f"  [{'OK ' if rows_vm[1] else '-- '}] {rows_vm[0]}" + ("" if rows_vm[1] else f"  ({rows_vm[2]})"))
+    missing = [c.name for c in provision.components().values() if not c.is_installed()]
+    if missing:
+        print(f"\n  To install what's missing: omnilaunch setup all   (or one of: {', '.join(missing)})")
     if wine:
         print(f"\n  Wine: {wine}")
     if engine:
@@ -229,6 +285,62 @@ def _envs(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     for e in items:
         used = time.strftime("%Y-%m-%d", time.localtime(e.last_used)) if e.last_used else "never"
         print(f"{e.name:45} {envs.human(e.size):>8}  last used {used}  {e.app}")
+    return 0
+
+
+def _setup(ns: argparse.Namespace) -> int:
+    comps = provision.components()
+    if not ns.component:
+        if not comps:
+            print("Nothing to set up on this computer.")
+            return 0
+        print("Helpers OmniLaunch can set up here:\n")
+        for c in comps.values():
+            print(f"  [{'OK ' if c.is_installed() else '-- '}] {c.name:10} {c.label}")
+        print("\nInstall one with `omnilaunch setup <name>`, or everything with `omnilaunch setup all`.")
+        return 0
+    names = [n for n, c in comps.items() if not c.is_installed()] if ns.component == "all" else [ns.component]
+    if not names:
+        print("Everything is already set up.")
+        return 0
+    code, done = 0, set()   # `done` stops shared dependencies being installed twice
+    for name in names:
+        if name in done:
+            continue
+        try:
+            provision.install(name, dry_run=ns.dry_run, _seen=done)
+        except provision.ManualStep as e:
+            print(f"{name}: needs a manual step: {e}", file=sys.stderr)
+            code = 1
+        except provision.SetupError as e:
+            print(f"{name}: setup failed: {e}", file=sys.stderr)
+            code = 1
+    return code
+
+
+def _vm(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if ns.vm_cmd == "set":
+        try:
+            cfg = vms.configure(ns.os, ns.tool, ns.name, ns.user, ns.password_file)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"Windows apps that Wine can't run will use the '{cfg.name}' VM ({cfg.tool}).")
+        print("Use it any time with: omnilaunch run --runner vm <app.exe>")
+        if not vms.find_tool(cfg.tool):
+            print(f"Note: {cfg.tool} doesn't seem to be installed yet.")
+        return 0
+    if ns.vm_cmd == "remove":
+        print("Removed." if vms.remove(ns.os) else "No VM was set up for that.")
+        return 0
+    if ns.vm_cmd == "show":
+        configs = vms.load()
+        if not configs:
+            print("No VMs set up. See: omnilaunch vm set --help")
+        for key, cfg in configs.items():
+            print(f"{key}: '{cfg.name}' via {cfg.tool}" + (f" as user {cfg.user}" if cfg.user else ""))
+        return 0
+    parser.print_help()
     return 0
 
 

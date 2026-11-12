@@ -25,7 +25,7 @@ Expect: Python 3.9 or newer. (In PowerShell, use `cd $HOME` instead of `cd %USER
 python -m unittest discover -s tests
 ```
 
-Expect: `OK` at the end (about 65 tests; a few are skipped on Windows).
+Expect: `OK` at the end (about 85 tests; a few are skipped on Windows).
 
 ## 3. Health check
 
@@ -66,8 +66,9 @@ Expect: "is an archive (DMG)", then "no such file", then "is a Windows library (
 
 ## 5. Linux apps through WSL (optional)
 
-1. If `doctor` showed `--` for WSL: open **Terminal as administrator**, run `wsl --install`,
-   restart, then finish the Ubuntu setup (pick a username and password).
+1. If `doctor` showed `--` for WSL, let OmniLaunch install it: `bin\omnilaunch setup wsl`
+   (Windows asks for administrator permission). Restart, then finish the Ubuntu setup window
+   (pick a username and password).
 2. `bin\omnilaunch doctor` should now show `[OK ] Linux apps (WSL)` and list Ubuntu.
 3. Copy a real Linux program out of WSL to test with:
 

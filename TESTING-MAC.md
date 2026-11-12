@@ -19,7 +19,7 @@ python3 --version             # Expect: 3.9 or newer
 python3 -m unittest discover -s tests
 ```
 
-Expect: `OK` at the end (about 65 tests; a few are skipped).
+Expect: `OK` at the end (about 85 tests).
 
 ## 3. Health check
 
@@ -60,18 +60,25 @@ echo hi > /tmp/fake.dmg && ./bin/omnilaunch run /tmp/fake.dmg     # Expect: "is 
 ./bin/omnilaunch integrate                                         # Expect: "Linux-only for now"
 ```
 
-## 5. Windows apps (optional, needs Wine)
+## 5. Windows apps (optional; OmniLaunch installs Wine for you)
 
-1. **Apple Silicon only:** install Rosetta 2:
-   `softwareupdate --install-rosetta --agree-to-license`
-2. Download the latest **wine-stable** `.tar.xz` from
-   https://github.com/Gcenx/macOS_Wine_builds/releases, double-click it to unpack, and drag
-   **Wine Stable.app** into Applications.
-3. It isn't notarised, so clear the quarantine flag once:
-   `xattr -dr com.apple.quarantine "/Applications/Wine Stable.app"`
+1. See what OmniLaunch can install, and preview the Wine install without doing it:
+
+```bash
+./bin/omnilaunch setup
+./bin/omnilaunch setup wine --dry-run
+```
+
+2. Install it for real. On Apple Silicon it installs Rosetta 2 first (asks for your Mac
+   password), then downloads Wine Stable into `~/Applications`:
+
+```bash
+./bin/omnilaunch setup wine
+```
+
    (If Wine later complains about GStreamer, install the GStreamer runtime from gstreamer.freedesktop.org.)
-4. `./bin/omnilaunch doctor` should now show `[OK ] Windows apps (Wine)`.
-5. Get a small Windows program, for example PuTTY's 64-bit `putty.exe` from
+3. `./bin/omnilaunch doctor` should now show `[OK ] Windows apps (Wine)`.
+4. Get a small Windows program, for example PuTTY's 64-bit `putty.exe` from
    https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html, then:
 
 ```bash
@@ -90,7 +97,11 @@ If it fails, run it again with `-v` and copy the output.
 
 ## 6. Linux apps (optional, needs a container engine)
 
-1. Install and start **OrbStack** (https://orbstack.dev) or **Docker Desktop**.
+1. Run `./bin/omnilaunch setup container`. With Homebrew it installs Podman and starts its
+   Linux VM; without Homebrew it tells you to install **OrbStack** (https://orbstack.dev) or
+   **Docker Desktop**. Using OrbStack or Docker Desktop? Install and open it, and the
+   commands below work as written. If you ended up with Podman, type `podman` wherever
+   these steps say `docker`.
 2. Make a real Linux program to test with (copies Debian's `ls` into the current folder):
 
 ```bash
@@ -108,6 +119,33 @@ docker run --rm --platform linux/amd64 -v "$PWD":/out debian:stable-slim cp /bin
 ```
 
 Note: keep test files under your home folder; Docker on a Mac may not see `/tmp` by default.
+
+## 7. Linux apps with windows (optional, after step 6)
+
+```bash
+./bin/omnilaunch setup linux-gui
+```
+
+Expect: the XQuartz installer opens (finish it), then a container image builds for a few
+minutes. **Log out of your Mac and back in once** afterwards. Then make a graphical Linux app
+to test with:
+
+```bash
+cd ~/omni-test
+docker run --rm -v "$PWD":/out omnilaunch/linux-gui sh -c \
+  "apt-get update -qq && apt-get install -y -qq x11-apps >/dev/null && cp /usr/bin/xeyes /out/xeyes"
+~/omnilaunch/bin/omnilaunch info ./xeyes      # Expect: Platform: linux, GUI: yes
+~/omnilaunch/bin/omnilaunch run ./xeyes       # Expect: an XQuartz window with eyes following the mouse
+```
+
+## 8. Windows VM fallback (optional, only if you have Parallels Desktop)
+
+```bash
+./bin/omnilaunch vm set windows --tool parallels --name "Windows 11"   # your VM's exact name
+./bin/omnilaunch run --runner vm ~/Downloads/putty.exe
+```
+
+Expect: the VM starts if needed and PuTTY opens inside Windows.
 
 ## What to send back
 

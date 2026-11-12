@@ -1,8 +1,9 @@
 # OmniLaunch
 
-One launcher for Linux, Windows and macOS apps. Point it at any app and it works out
-what platform the app was built for, picks the right compatibility layer, gives the app
-its own isolated environment, and runs it. Works on **Windows**, **macOS** and **Linux** computers.
+One app that runs on **Windows**, **macOS** and **Linux**, and opens apps made for any of
+them. Point it at an app and it works out what platform the app was built for, installs the
+helper it needs if it's missing (Wine, WSL, a container engine, ...), and runs the app,
+each in its own isolated environment.
 
 It's the first building block of an OS where apps "just run" no matter which platform
 they were built for.
@@ -30,11 +31,14 @@ Wine and a Java `.class` file isn't mistaken for a Mac binary.
 
 | App type | On a Windows PC | On a Mac | On a Linux computer |
 |---|---|---|---|
-| Windows app | Native | Wine (standalone "Wine Stable" app or MacPorts) | Wine or Proton |
-| Linux command-line app | WSL (or a Docker container) | Docker/Podman/OrbStack container | Native |
-| Linux graphical app | WSL on Windows 11 (WSLg) | Not yet (needs an X11 setup) | Native |
+| Windows app | Native | Wine, or a Windows VM as fallback | Wine or Proton, or a Windows VM as fallback |
+| Linux command-line app | WSL (or a Docker container) | Container (hidden Linux VM) | Native |
+| Linux graphical app | WSL on Windows 11 (WSLg) | Container + XQuartz: windows appear on the Mac | Native |
 | Mac command-line tool | Not possible | Native | Darling (Intel builds only) |
 | Mac graphical app | Not possible | Native | Unlikely to work (Darling) |
+
+Mac apps can't run on Windows: nothing exists that does it, and Apple's licence only allows
+macOS on Apple hardware. That's the one combination OmniLaunch can't cover.
 
 ChromeOS works through its built-in Linux environment (treat it as Linux). Phones and
 tablets (iOS, Android) can't run other platforms' desktop apps, so they're out of scope.
@@ -51,8 +55,9 @@ Windows: install Python from python.org or the Microsoft Store, and Git for Wind
 ```bash
 git clone https://github.com/KPSITConsultancyPtyLtd/omnilaunch
 cd omnilaunch
-./bin/omnilaunch doctor          # Mac/Linux: which compatibility layers are installed
-bin\omnilaunch doctor            # Windows (Command Prompt or PowerShell)
+./bin/omnilaunch doctor          # Mac/Linux: what's installed (Windows: bin\omnilaunch doctor)
+./bin/omnilaunch setup all       # install every helper this computer is missing
+./bin/omnilaunch run <any app>   # or just run an app: it offers to install what it needs
 ```
 
 Step-by-step test guides: **[TESTING-MAC.md](TESTING-MAC.md)** and **[TESTING-WINDOWS.md](TESTING-WINDOWS.md)**.
@@ -66,9 +71,14 @@ omnilaunch doctor                          # what's installed, where environment
 omnilaunch info ~/Downloads/setup.exe      # what platform/CPU an app was built for
 omnilaunch run  ~/Apps/notepad++.exe       # run it
 omnilaunch run  ./tool --dry-run           # show what would run, without running it
-omnilaunch run  --runner container ./tool  # force a layer: native, wine, proton, darling, container, wsl
+omnilaunch run  --runner container ./tool  # force a layer: native, wine, proton, darling, container, wsl, vm
 omnilaunch run  ./app.exe -v               # show Wine/Proton debug output
 omnilaunch run  ./app.exe -- --dry-run     # everything after -- goes to the app
+omnilaunch run  -y ./app.exe               # install any missing helper without asking
+omnilaunch setup                           # list helpers and whether they're installed
+omnilaunch setup wine                      # install one (or `all`); add --dry-run to preview
+omnilaunch vm set windows --tool parallels --name "Windows 11"   # VM fallback for Windows apps
+omnilaunch run  --runner vm ./app.exe      # force an app into the VM
 omnilaunch envs list                       # per-app environments, size, last used
 omnilaunch envs remove wine/notepad-1a2b3c4d
 omnilaunch integrate                       # double-click to open: .exe/.msi on Linux, .AppImage on Windows
@@ -86,9 +96,12 @@ double-click, errors appear as desktop notifications.
 | `OMNILAUNCH_PROTON` | Path to a Proton `proton` script; Windows apps then use Proton (Linux only) |
 | `OMNILAUNCH_LINUX_IMAGE` | Container image for Linux apps run in a container (default `debian:stable-slim`) |
 
-### Installing the compatibility layers
+### Helpers, and how they get installed
 
-| Layer | Windows | Mac | Linux |
+`omnilaunch setup <name>` (or the prompt during `run`) installs these for you; the table
+shows what it does, in case you'd rather do it by hand.
+
+| Helper | Windows | Mac | Linux |
 |---|---|---|---|
 | WSL | `wsl --install` in an admin terminal, then restart | n/a | n/a |
 | Wine | n/a (Windows apps are native) | Download *Wine Stable* from [Gcenx/macOS_Wine_builds](https://github.com/Gcenx/macOS_Wine_builds/releases) into Applications, or use MacPorts. Homebrew's Wine casks were disabled in September 2026. Needs Rosetta 2 on Apple Silicon | `sudo apt install wine` (or dnf/pacman) |
@@ -96,6 +109,14 @@ double-click, errors appear as desktop notifications.
 | Containers | Docker Desktop or Podman Desktop (optional; WSL is preferred) | [OrbStack](https://orbstack.dev), Docker Desktop or Podman | `docker` or `podman` |
 | Darling | n/a | n/a (Mac apps run natively) | [darlinghq.org](https://www.darlinghq.org) (experimental) |
 | Rosetta 2 | n/a | `softwareupdate --install-rosetta --agree-to-license` | n/a |
+| XQuartz + GUI image (`linux-gui`) | n/a | Downloads and opens the XQuartz installer, then builds an `omnilaunch/linux-gui` container image with common GUI libraries | n/a (Linux GUI apps are native) |
+| Windows VM | n/a | Bring your own VM in Parallels Desktop or VirtualBox, then `omnilaunch vm set ...` | VirtualBox VM, then `omnilaunch vm set ...` |
+
+**About the VM fallback:** OmniLaunch drives a Windows VM you already have rather than
+building one (Windows needs your own licence). With Parallels, apps under your home folder
+run straight from the shared `\\Mac\Home`. With VirtualBox, give a Windows account and a
+password file (`--user me --password-file ~/.winpass`); the app is copied into the VM at
+`C:\OmniLaunch`.
 
 ## Honest limits
 
@@ -106,8 +127,9 @@ double-click, errors appear as desktop notifications.
   macOS components on non-Apple hardware.
 - **Windows apps** depend on Wine compatibility: many work well, while anti-cheat games
   and apps with kernel drivers don't.
-- **Linux apps on a Mac** run in a container that can only see the app's own folder, and
-  only command-line apps work for now.
+- **Linux apps on a Mac** run in a container that can only see the app's own folder.
+  Graphical ones show their windows through XQuartz: fine for most tools, but not for
+  games or apps that need fast 3D graphics.
 
 ## Run the tests
 
@@ -124,9 +146,9 @@ also runs them on real Windows, macOS and Linux machines on every push (see the 
 2. ~~Desktop integration, env management, runner override, installable package~~ (v0.2)
 3. ~~macOS host support: native Mac apps, Rosetta, Wine on Mac, Linux apps in containers~~ (v0.3)
 4. ~~Windows host support: native Windows apps, Linux apps via WSL, .AppImage double-click~~ (v0.4)
-5. Graphical app library (icons, per-app settings, Wine/Proton version per app)
-6. Linux GUI apps on Mac (XQuartz) and double-click integration on Mac
-7. Automatic installation of missing layers on first use
+5. ~~Automatic setup of helpers; Linux GUI apps on Mac; Windows VM fallback~~ (v0.5)
+6. Graphical app library (icons, per-app settings, Wine/Proton version per app)
+7. Double-click integration on Mac
 8. Package as a custom Linux distro (e.g. Fedora/Ubuntu base, OmniLaunch preinstalled)
 
 ## Licence
