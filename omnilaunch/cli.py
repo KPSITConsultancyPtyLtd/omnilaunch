@@ -405,7 +405,8 @@ def _integrate(ns: argparse.Namespace) -> int:
     for step in steps:
         print(("would " if ns.dry_run else "") + step)
     if not ns.dry_run:
-        what = ".AppImage files" if runners.HOST_OS == "windows" else ".exe, .msi and Mac binaries"
+        what = {"windows": ".apk and .AppImage files",
+                "macos": ".exe, .msi, .apk and .AppImage files"}.get(runners.HOST_OS, ".exe, .msi, .apk and Mac files")
         print(f"Done. Double-clicking {what} now opens them with OmniLaunch.")
     return 0
 
