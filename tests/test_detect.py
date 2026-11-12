@@ -136,6 +136,22 @@ class DetectTests(TmpCase):
         self.assertEqual(detect(_write(self.d, "x.bin", b"PK\x03\x04data")).platform, Platform.ARCHIVE)
 
 
+class RealHostTests(unittest.TestCase):
+    """No simulation: checks against the computer the tests are actually running on."""
+
+    def test_detects_own_python_as_native_app(self):
+        expected = {"linux": Platform.LINUX, "macos": Platform.MACOS, "windows": Platform.WINDOWS}
+        if runners.HOST_OS not in expected:
+            self.skipTest(f"unsupported host {runners.HOST_OS}")
+        info = detect(os.path.realpath(sys.executable))
+        self.assertEqual(info.platform, expected[runners.HOST_OS], info)
+        self.assertEqual(runners.plan(info).runner.split()[0], "native")
+
+    def test_doctor_runs_for_real(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["doctor"]), 0)
+
+
 class PlanTests(TmpCase):
     def test_native_linux_runs_in_app_folder(self):
         lp = runners.plan(detect(_write(self.d, "app", fake_elf(HOST_ELF))))
@@ -144,11 +160,13 @@ class PlanTests(TmpCase):
     def test_32bit_runs_natively_on_64bit(self):
         self.assertEqual(runners.plan(detect(_write(self.d, "app", fake_elf(0x03)))).runner, "native")
 
+    @unittest.skipIf(os.name == "nt", "Windows files have no executable flag")
     def test_not_executable_gives_chmod_hint(self):
         with self.assertRaises(runners.UnsupportedApp) as cm:
             runners.plan(detect(_write(self.d, "app", fake_elf(HOST_ELF), mode=0o644)))
         self.assertIn("chmod +x", cm.exception.hint)
 
+    @unittest.skipIf(os.name == "nt", "Windows files have no executable flag")
     def test_non_executable_script_uses_interpreter(self):
         lp = runners.plan(detect(_write(self.d, "s.sh", b"#!/bin/sh\n", mode=0o644)))
         self.assertEqual(lp.argv[0], "/bin/sh")
@@ -278,7 +296,7 @@ class MacHostTests(TmpCase):
         _write(os.path.dirname(fake), "wine", b"#!/bin/sh\n")
         with mock.patch.object(runners, "MAC_WINE_GLOBS",
                                [os.path.join(self.d, "Wine*.app/Contents/Resources/wine/bin/wine")]):
-            self.assertEqual(runners.find_wine(), fake)
+            self.assertEqual(os.path.normpath(runners.find_wine()), os.path.normpath(fake))
 
     def test_wine_missing_on_mac_points_to_standalone_build(self):
         self.with_tools()
@@ -306,6 +324,154 @@ class MacHostTests(TmpCase):
         with contextlib.redirect_stdout(out), mock.patch.object(runners, "rosetta_installed", return_value=False):
             cli.main(["doctor"])
         self.assertIn("Rosetta", out.getvalue())
+
+
+class FakeWinreg:
+    """Just enough of the winreg module to test file association without Windows."""
+    HKEY_CURRENT_USER, REG_SZ, REG_NONE, KEY_SET_VALUE, KEY_ALL_ACCESS = "HKCU", 1, 0, 2, 3
+
+    def __init__(self):
+        self.keys = {}
+
+    class _Key:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def CreateKey(self, root, path):
+        self.keys.setdefault(path, {})
+        return self._Key(path)
+
+    def OpenKey(self, root, path, *a):
+        if path not in self.keys:
+            raise OSError(path)
+        return self._Key(path)
+
+    def SetValueEx(self, key, name, _, kind, value):
+        self.keys[key.path][name] = value
+
+    def QueryValueEx(self, key, name):
+        return self.keys[key.path][name], 1
+
+    def DeleteValue(self, key, name):
+        del self.keys[key.path][name]
+
+    def DeleteKey(self, root, path):
+        if path not in self.keys:
+            raise OSError(path)
+        del self.keys[path]
+
+
+class WindowsHostTests(TmpCase):
+    def setUp(self):
+        super().setUp()
+        self.host("windows", "x86_64")
+
+    def test_exe_runs_natively(self):
+        lp = runners.plan(detect(_write(self.d, "app.exe", fake_pe())), ["/s"])
+        self.assertEqual((lp.runner, lp.argv[1:]), ("native", ["/s"]))
+
+    def test_msi_bat_lnk(self):
+        self.assertEqual(runners.plan(detect(_write(self.d, "a.msi", b"\xd0\xcf"))).argv[:2], ["msiexec", "/i"])
+        self.assertEqual(runners.plan(detect(_write(self.d, "a.bat", b"echo"))).argv[:2], ["cmd", "/c"])
+        self.assertEqual(runners.plan(detect(_write(self.d, "a.lnk", b"L\0\0\0"))).argv[:4],
+                         ["cmd", "/c", "start", ""])
+
+    def test_arm_exe_on_x64_rejected(self):
+        with self.assertRaises(runners.UnsupportedApp):
+            runners.plan(detect(_write(self.d, "a.exe", fake_pe(machine=0xAA64))))
+
+    def test_x64_exe_on_arm_pc_runs_with_note(self):
+        self.host("windows", "arm64")
+        lp = runners.plan(detect(_write(self.d, "a.exe", fake_pe())))
+        self.assertIn("emulates", " ".join(lp.notes))
+
+    def test_linux_app_goes_to_wsl(self):
+        self.with_tools("wsl")
+        lp = runners.plan(detect(_write(self.d, "tool", fake_elf())), ["-la"])
+        self.assertEqual(lp.runner, "wsl")
+        self.assertEqual(lp.argv[0], "/usr/bin/wsl")
+        self.assertEqual(lp.argv[1], "--cd")
+        self.assertEqual(lp.argv[3:], ["--exec", runners.to_wsl_path(os.path.join(self.d, "tool")), "-la"])
+
+    def test_linux_script_runs_via_interpreter_in_wsl(self):
+        self.with_tools("wsl")
+        lp = runners.plan(detect(_write(self.d, "s.sh", b"#!/bin/bash -e\n")))
+        self.assertEqual(lp.argv[3:6], ["--exec", "/bin/bash", "-e"])
+
+    def test_appimage_in_wsl_extracts(self):
+        self.with_tools("wsl")
+        lp = runners.plan(detect(_write(self.d, "a.AppImage", fake_elf(appimage=True))))
+        self.assertIn("APPIMAGE_EXTRACT_AND_RUN=1", lp.argv)
+
+    def test_linux_falls_back_to_container_without_wsl(self):
+        self.with_tools("docker")
+        lp = runners.plan(detect(_write(self.d, "tool", fake_elf())))
+        self.assertTrue(lp.runner.startswith("container"))
+        self.assertIn(f"{self.d}:/work", lp.argv)
+        self.assertEqual(lp.argv[-1], "/work/tool")
+
+    def test_no_wsl_explains(self):
+        self.with_tools()
+        with self.assertRaises(runners.UnsupportedApp) as cm:
+            runners.plan(detect(_write(self.d, "tool", fake_elf())))
+        self.assertIn("wsl --install", cm.exception.hint)
+
+    def test_mac_app_explains(self):
+        with self.assertRaises(runners.UnsupportedApp) as cm:
+            runners.plan(detect(_write(self.d, "tool", fake_macho())))
+        self.assertIn("Windows version", cm.exception.hint)
+
+    def test_wine_refused_on_windows(self):
+        with self.assertRaises(runners.UnsupportedApp):
+            runners.plan(detect(_write(self.d, "a.exe", fake_pe())), runner="wine")
+
+    def test_wsl_paths(self):
+        t = runners.to_wsl_path
+        self.assertEqual(t("C:\\Users\\me\\My Apps\\tool"), "/mnt/c/Users/me/My Apps/tool")
+        self.assertEqual(t("D:/x/y"), "/mnt/d/x/y")
+        self.assertEqual(t("\\\\wsl.localhost\\Ubuntu\\home\\me\\a"), "/home/me/a")
+        self.assertEqual(t("\\\\wsl$\\Debian\\opt\\x"), "/opt/x")
+
+    def test_wsl_distro_list_decodes_utf16(self):
+        self.with_tools("wsl")
+        out = "Ubuntu\r\nDebian\r\n".encode("utf-16-le")
+        with mock.patch.object(runners.subprocess, "run", return_value=mock.Mock(stdout=out)):
+            self.assertEqual(runners.wsl_distros(), ["Ubuntu", "Debian"])
+
+    def test_windows_data_dir(self):
+        with mock.patch.dict(os.environ, {"LOCALAPPDATA": os.path.join(self.d, "Local")}):
+            os.environ.pop("OMNILAUNCH_HOME")
+            self.assertEqual(runners.data_dir(), os.path.join(self.d, "Local", "OmniLaunch"))
+
+    def test_file_association_round_trip(self):
+        reg = FakeWinreg()
+        with mock.patch.object(desktop, "_winreg", return_value=reg), \
+                mock.patch.object(desktop, "_notify_shell_of_change"):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cli.main(["integrate"]), 0)
+            cmd = reg.keys[r"Software\Classes\OmniLaunch.App\shell\open\command"][""]
+            self.assertTrue(cmd.endswith('run --notify "%1"'))
+            self.assertEqual(reg.keys[r"Software\Classes\.AppImage"][""], "OmniLaunch.App")
+            self.assertTrue(desktop.windows_integrated())
+            self.assertTrue(desktop.unintegrate())
+            self.assertFalse(desktop.windows_integrated())
+            self.assertNotIn("", reg.keys[r"Software\Classes\.AppImage"])
+
+    def test_doctor_runs(self):
+        self.with_tools("wsl")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(runners, "wsl_distros", return_value=["Ubuntu"]), \
+                mock.patch.object(desktop, "windows_integrated", return_value=False):
+            cli.main(["doctor"])
+        self.assertIn("Linux apps (WSL)", out.getvalue())
+        self.assertIn("Ubuntu", out.getvalue())
 
 
 class CliTests(TmpCase):

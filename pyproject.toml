@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "omnilaunch"
 dynamic = ["version"]
-description = "Run Linux, Windows and macOS apps through one launcher, on Linux or macOS"
+description = "Run Linux, Windows and macOS apps through one launcher, on Windows, macOS or Linux"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "KPS IT Consultancy Pty Ltd" }]
-classifiers = ["Operating System :: POSIX :: Linux", "Operating System :: MacOS", "Environment :: Console"]
+classifiers = ["Operating System :: POSIX :: Linux", "Operating System :: MacOS", "Operating System :: Microsoft :: Windows", "Environment :: Console"]
 
 [project.scripts]
 omnilaunch = "omnilaunch.cli:main"

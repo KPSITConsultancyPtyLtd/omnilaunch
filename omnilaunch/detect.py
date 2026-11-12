@@ -50,7 +50,7 @@ def detect(path: str) -> AppInfo:
 
     # macOS .app bundles are directories; find the real binary via Info.plist.
     if os.path.isdir(path):
-        if path.rstrip("/").endswith(".app"):
+        if path.rstrip("/\\").endswith(".app"):
             exe = _macos_bundle_executable(path)
             if not exe:
                 return AppInfo(path, path, Platform.MACOS, kind="app bundle (no binary found)")

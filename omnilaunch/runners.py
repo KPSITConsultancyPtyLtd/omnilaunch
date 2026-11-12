@@ -1,9 +1,10 @@
-"""Turn a detected app into the command that runs it on this machine (Linux or macOS host)."""
+"""Turn a detected app into the command that runs it on this machine (Linux, macOS or Windows host)."""
 
 from __future__ import annotations
 
 import glob
 import hashlib
+import ntpath
 import os
 import platform as host_platform
 import shlex
@@ -14,9 +15,10 @@ from dataclasses import dataclass, field
 
 from .detect import AppInfo, Platform
 
-RUNNERS = ("native", "wine", "proton", "darling", "container")
+RUNNERS = ("native", "wine", "proton", "darling", "container", "wsl")
 
-HOST_OS = {"darwin": "macos", "linux": "linux"}.get(sys.platform, sys.platform)
+HOST_OS = {"darwin": "macos", "linux": "linux", "win32": "windows", "cygwin": "windows"}.get(
+    sys.platform, "linux" if sys.platform.startswith("linux") else sys.platform)
 HOST_ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "arm64", "arm64": "arm64",
              "i686": "x86", "i386": "x86", "armv7l": "arm", "riscv64": "riscv"}.get(
     host_platform.machine().lower(), host_platform.machine().lower())
@@ -59,6 +61,9 @@ def data_dir() -> str:
         return os.path.expanduser(os.environ["OMNILAUNCH_HOME"])
     if HOST_OS == "macos":
         return os.path.expanduser("~/Library/Application Support/OmniLaunch")
+    if HOST_OS == "windows":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local")
+        return os.path.join(base, "OmniLaunch")
     return os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "omnilaunch")
 
 
@@ -103,6 +108,37 @@ def find_container_engine() -> str | None:
     return which("docker", "podman")
 
 
+def find_wsl() -> str | None:
+    return which("wsl") if HOST_OS == "windows" else None
+
+
+def wsl_distros() -> list[str]:
+    """Installed WSL distributions (empty if WSL is missing or has no Linux installed)."""
+    wsl = find_wsl()
+    if not wsl:
+        return []
+    try:
+        raw = subprocess.run([wsl, "--list", "--quiet"], capture_output=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    text = raw.decode("utf-16-le", errors="ignore") if b"\x00" in raw else raw.decode(errors="ignore")
+    return [line.strip().strip("\x00") for line in text.splitlines() if line.strip().strip("\x00")]
+
+
+def to_wsl_path(path: str) -> str:
+    """C:\\Users\\me\\app -> /mnt/c/Users/me/app ; \\\\wsl.localhost\\Ubuntu\\home\\me -> /home/me"""
+    p = path.replace("/", "\\")
+    low = p.lower()
+    for unc in ("\\\\wsl.localhost\\", "\\\\wsl$\\"):
+        if low.startswith(unc):
+            rest = p[len(unc):].split("\\", 1)          # drop the distro name
+            return "/" + (rest[1].replace("\\", "/") if len(rest) > 1 else "")
+    drive, tail = ntpath.splitdrive(p)
+    if len(drive) == 2 and drive[1] == ":":
+        return f"/mnt/{drive[0].lower()}" + tail.replace("\\", "/")
+    return path.replace("\\", "/")
+
+
 def rosetta_installed() -> bool:
     if HOST_OS != "macos" or HOST_ARCH != "arm64":
         return False
@@ -116,13 +152,19 @@ def rosetta_installed() -> bool:
 
 def app_id(info: AppInfo) -> str:
     """Stable per-app id, so each app gets its own isolated environment."""
-    base = os.path.splitext(os.path.basename(info.path.rstrip("/")))[0] or "app"
+    base = os.path.splitext(os.path.basename(info.path.rstrip("/\\")))[0] or "app"
     base = "".join(c if c.isalnum() or c in "-_." else "_" for c in base)
     digest = hashlib.sha1(info.path.encode()).hexdigest()[:8]
     return f"{base}-{digest}"
 
 
 def default_runner(info: AppInfo) -> str:
+    if HOST_OS == "windows":
+        if info.platform == Platform.WINDOWS:
+            return "native"
+        if info.platform == Platform.MACOS:
+            return "native"   # explained as unsupported by _windows_native
+        return "wsl" if find_wsl() or not find_container_engine() else "container"
     if info.platform == Platform.WINDOWS:
         return "proton" if os.environ.get("OMNILAUNCH_PROTON") and HOST_OS == "linux" else "wine"
     if info.platform == Platform.SCRIPT:
@@ -152,12 +194,16 @@ def plan(info: AppInfo, args: list[str] | None = None, runner: str | None = None
             lp = _script(info, args)
         elif HOST_OS == "macos":
             lp = _mac_native(info, args)
+        elif HOST_OS == "windows":
+            lp = _windows_native(info, args)
         else:
             lp = _linux_native(info, args)
     elif target in ("wine", "proton"):
         lp = _windows(info, args, target, verbose)
     elif target == "container":
         lp = _container(info, args)
+    elif target == "wsl":
+        lp = _wsl(info, args)
     else:
         lp = _darling(info, args)
     if lp.cwd is None:
@@ -201,6 +247,8 @@ def _linux_native(info: AppInfo, args: list[str]) -> LaunchPlan:
 def _darling(info: AppInfo, args: list[str]) -> LaunchPlan:
     if HOST_OS == "macos":
         raise UnsupportedApp("Darling is for Linux. On a Mac, Mac apps run natively.", "Use --runner native.")
+    if HOST_OS != "linux":
+        raise UnsupportedApp("Darling only runs on Linux.")
     darling = which("darling")
     if not darling:
         raise UnsupportedApp(
@@ -254,33 +302,94 @@ def _container(info: AppInfo, args: list[str]) -> LaunchPlan:
         raise UnsupportedApp("Containers run Linux apps only.")
     engine = find_container_engine()
     if not engine:
-        hint = ("Install Docker Desktop, OrbStack or Podman (e.g. `brew install --cask orbstack`), "
-                "then start it." if HOST_OS == "macos" else "Install docker or podman.")
+        hint = {"macos": "Install OrbStack, Docker Desktop or Podman (e.g. `brew install --cask orbstack`), "
+                         "then start it.",
+                "windows": "Install WSL instead (run `wsl --install` in an admin terminal), "
+                           "or Docker Desktop / Podman Desktop."}.get(HOST_OS, "Install docker or podman.")
         raise UnsupportedApp("Linux apps need a container engine on this machine, and none was found.", hint)
-    _require_exec(info)
+    if HOST_OS != "windows":   # Windows filesystems have no executable flag
+        _require_exec(info)
     folder = os.path.dirname(info.executable)
+    # Windows paths (C:\\...) can't be used inside a Linux container, so mount the folder at /work there.
+    guest_folder = "/work" if HOST_OS == "windows" else folder
+    guest_exe = guest_folder + "/" + os.path.basename(info.executable)
     image = os.environ.get("OMNILAUNCH_LINUX_IMAGE", DEFAULT_LINUX_IMAGE)
     argv = [engine, "run", "--rm", "-i"]
     if sys.stdin.isatty() and sys.stdout.isatty():
         argv.append("-t")
     arch = info.arch if info.arch in CONTAINER_PLATFORMS else HOST_ARCH
     argv += ["--platform", CONTAINER_PLATFORMS.get(arch, "linux/amd64"),
-             "-v", f"{folder}:{folder}", "-w", folder]
+             "-v", f"{folder}:{guest_folder}", "-w", guest_folder]
     notes = [f"Running in a {image} container ({os.path.basename(engine)}); the app sees only its own folder.",
              "Command-line Linux apps only: graphical Linux apps need an X11/Wayland setup."]
     if info.kind == "AppImage":
         argv += ["-e", "APPIMAGE_EXTRACT_AND_RUN=1"]
-    if HOST_OS == "macos" and info.arch not in ("unknown", HOST_ARCH) and info.arch in CONTAINER_PLATFORMS:
-        notes.append(f"{info.arch} Linux app on an {HOST_ARCH} Mac: emulated, so slower.")
-    argv += [image, info.executable, *args]
+    if HOST_OS != "linux" and info.arch not in ("unknown", HOST_ARCH) and info.arch in CONTAINER_PLATFORMS:
+        notes.append(f"{info.arch} Linux app on an {HOST_ARCH} machine: emulated, so slower.")
+    argv += [image, guest_exe, *args]
     return LaunchPlan(f"container ({os.path.basename(engine)})", argv, notes=notes)
 
 
-# ---------------------------------------------------------------- Windows apps (either host)
+# ---------------------------------------------------------------- Windows host
+
+def _windows_native(info: AppInfo, args: list[str]) -> LaunchPlan:
+    if info.platform == Platform.MACOS:
+        raise UnsupportedApp(
+            "Mac apps can't run on Windows: no compatibility layer for them exists.",
+            "Look for the Windows version of this app. (Apple's licence only allows macOS on Apple hardware, "
+            "so a macOS virtual machine isn't an option on a PC.)")
+    if info.platform in (Platform.LINUX, Platform.SCRIPT):
+        raise UnsupportedApp("Linux apps can't run natively on Windows.", "Use --runner wsl.")
+    notes = []
+    if info.arch == "arm64" and HOST_ARCH != "arm64":
+        raise UnsupportedApp("This Windows app is built for ARM PCs only, and this PC is x86_64.",
+                             "Look for the x64 version.")
+    if HOST_ARCH == "arm64" and info.arch in ("x86", "x86_64"):
+        notes.append("x86 app on a Windows ARM PC: Windows emulates it automatically, so it may be slower.")
+    ext = os.path.splitext(info.executable.lower())[1]
+    if ext == ".msi":
+        argv = ["msiexec", "/i", info.executable, *args]
+    elif ext in (".bat", ".cmd"):
+        argv = ["cmd", "/c", info.executable, *args]
+    elif ext == ".lnk":
+        argv = ["cmd", "/c", "start", "", info.executable, *args]
+    else:
+        argv = [info.executable, *args]
+    return LaunchPlan("native", argv, notes=notes)
+
+
+def _wsl(info: AppInfo, args: list[str]) -> LaunchPlan:
+    if HOST_OS != "windows":
+        raise UnsupportedApp("WSL is only available on Windows.")
+    if info.platform not in (Platform.LINUX, Platform.SCRIPT, Platform.UNKNOWN):
+        raise UnsupportedApp("WSL runs Linux apps only.")
+    wsl = find_wsl()
+    if not wsl:
+        raise UnsupportedApp("Linux apps on Windows need WSL, which isn't installed.",
+                             "Run `wsl --install` in an administrator terminal, then restart.")
+    guest_exe = to_wsl_path(info.executable)
+    guest_dir = to_wsl_path(os.path.dirname(info.executable))
+    notes = ["Running in WSL. On Windows 11, graphical Linux apps open in their own windows (WSLg)."]
+    if HOST_ARCH == "arm64" and info.arch in ("x86_64", "x86"):
+        notes.append("x86 Linux app on a Windows ARM PC: WSL needs qemu-user/binfmt set up inside Linux.")
+    if info.kind == "AppImage":
+        notes.append("AppImage: extracting instead of mounting (WSL usually has no FUSE).")
+        return LaunchPlan("wsl", [wsl, "--cd", guest_dir, "--exec", "env", "APPIMAGE_EXTRACT_AND_RUN=1",
+                                  guest_exe, *args], notes=notes)
+    if info.platform == Platform.SCRIPT and info.interpreter:
+        # Files on C: may lack the executable bit inside WSL, so call the interpreter explicitly.
+        return LaunchPlan("wsl", [wsl, "--cd", guest_dir, "--exec", *shlex.split(info.interpreter),
+                                  guest_exe, *args], notes=notes)
+    return LaunchPlan("wsl", [wsl, "--cd", guest_dir, "--exec", guest_exe, *args], notes=notes)
+
+
+# ---------------------------------------------------------------- Windows apps on Linux/macOS
 
 def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool) -> LaunchPlan:
     if info.platform not in (Platform.WINDOWS, Platform.UNKNOWN):
         raise UnsupportedApp(f"Wine and Proton run Windows apps, but this is a {info.platform.value} app.")
+    if HOST_OS == "windows":
+        raise UnsupportedApp("This is Windows already: Windows apps run natively.", "Use --runner native.")
     if "DLL" in info.kind:
         raise UnsupportedApp(f"{os.path.basename(info.path)} is a Windows library (DLL), not an app.",
                              "Run the .exe that uses it instead.")

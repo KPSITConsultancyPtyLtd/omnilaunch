@@ -19,7 +19,7 @@ python3 --version             # Expect: 3.9 or newer
 python3 -m unittest discover -s tests
 ```
 
-Expect: `OK` at the end (about 50 tests).
+Expect: `OK` at the end (about 65 tests; a few are skipped).
 
 ## 3. Health check
 
