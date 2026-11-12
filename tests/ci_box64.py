@@ -39,6 +39,14 @@ for name, exe in programs.items():
     print(f"{'PASS' if ok else 'FAIL'}  {name} via Box64 + Wine on ARM64 ({time.time() - t:.0f}s): "
           f"{r.stdout.strip() or '(no output)'}", flush=True)
     if not ok:
-        failures += 1
-        print(tail, flush=True)
+        print(f"      exit code {r.returncode}; retrying with Wine/Box64 diagnostics on", flush=True)
+        lp = runners.plan(detect(exe), runner="box64", verbose=True)
+        r = subprocess.run(lp.argv, capture_output=True, text=True, timeout=2700)
+        ok = r.returncode == 0 and "hello from windows" in r.stdout
+        print(f"{'PASS' if ok else 'FAIL'}  {name} (second run): exit {r.returncode}, stdout={r.stdout.strip()!r}",
+              flush=True)
+        if not ok:
+            failures += 1
+            lines = [ln for ln in (r.stderr or "").splitlines() if ln.strip()]
+            print("\n".join(lines[-80:]), flush=True)
 sys.exit(1 if failures else 0)
