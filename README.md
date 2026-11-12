@@ -100,3 +100,7 @@ python3 -m unittest discover -s tests -v
 3. Graphical app library (icons, per-app settings, Wine/Proton version per app)
 4. Automatic installation of missing layers on first use
 5. Package as a custom Linux distro (e.g. Fedora/Ubuntu base, OmniLaunch preinstalled)
+
+## Licence
+
+Apache 2.0. See [LICENSE](LICENSE).
