@@ -25,7 +25,7 @@ Expect: Python 3.9 or newer. (In PowerShell, use `cd $HOME` instead of `cd %USER
 python -m unittest discover -s tests
 ```
 
-Expect: `OK` at the end (about 85 tests; a few are skipped on Windows).
+Expect: `OK` at the end (about 115 tests; a few are skipped on Windows).
 
 ## 3. Health check
 
@@ -99,6 +99,30 @@ bin\omnilaunch integrate
 
 Expect: "Done. Double-clicking .AppImage files now opens them with OmniLaunch."
 Undo it with `bin\omnilaunch integrate --remove`.
+
+## 6. Android apps (`.apk`)
+
+```bat
+bin\omnilaunch integrate
+bin\omnilaunch setup android
+```
+
+The first line makes double-clicking `.apk` files open them with OmniLaunch; the second
+downloads Google's Android Emulator (about 2 GB). If the emulator later won't start, turn on
+**Windows Hypervisor Platform** in *Turn Windows features on or off*, and restart.
+
+Download an `.apk` (for example F-Droid from https://f-droid.org/F-Droid.apk) and
+**double-click it**. Expect: an Android phone window starts (about a minute the first time),
+then the app installs and opens in it.
+
+And a Mac `.dmg`, to see the honest answer:
+
+```bat
+bin\omnilaunch run %USERPROFILE%\Downloads\some-app.dmg
+```
+
+Expect: "is a Mac app installer, and Mac apps can't be installed on Windows", plus a pointer
+to look for the Windows version.
 
 ## What to send back
 
