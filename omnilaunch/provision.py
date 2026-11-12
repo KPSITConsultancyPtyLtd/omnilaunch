@@ -31,6 +31,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 """
 
+UMU_RELEASES_API = "https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases?per_page=5"
 WINE_RELEASES_API = "https://api.github.com/repos/Gcenx/macOS_Wine_builds/releases?per_page=30"
 XQUARTZ_RELEASES_API = "https://api.github.com/repos/XQuartz/XQuartz/releases?per_page=5"
 
@@ -51,6 +52,7 @@ class Component:
     install: Callable[["Installer"], None]
     requires: list[str] = field(default_factory=list)
     note: str = ""   # shown after installing, e.g. "restart your PC"
+    size: str = ""   # rough download size, shown before installing
 
 
 @dataclass
@@ -59,12 +61,20 @@ class Installer:
     dry_run: bool = False
     log: Callable[[str], None] = print
     steps: list[str] = field(default_factory=list)
+    gui: bool = False   # no terminal: ask for passwords with the system prompt, log output to a file
 
     def run(self, argv: list[str], **kw) -> None:
         self.steps.append(" ".join(argv))
         self.log(("would run: " if self.dry_run else "$ ") + " ".join(argv))
         if self.dry_run:
             return
+        if argv and argv[0] == "sudo" and (self.gui or not sys.stdin.isatty()):
+            from .desktop import run_as_admin
+            argv = run_as_admin(argv[1:])
+        if self.gui and "stdout" not in kw:
+            os.makedirs(runners.data_dir(), exist_ok=True)
+            log = open(os.path.join(runners.data_dir(), "setup.log"), "a")
+            kw.update(stdout=log, stderr=subprocess.STDOUT)
         try:
             subprocess.run(argv, check=True, **kw)
         except FileNotFoundError:
@@ -158,6 +168,31 @@ def _install_wine(inst: Installer) -> None:
     shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _install_proton(inst: Installer) -> None:
+    # Arch and Fedora package umu-launcher; elsewhere use the self-contained zipapp from its releases.
+    for mgr, cmd in (("pacman", ["sudo", "pacman", "-S", "--needed", "--noconfirm", "umu-launcher"]),
+                     ("dnf", ["sudo", "dnf", "install", "-y", "umu-launcher"])):
+        if runners.which(mgr):
+            inst.run(cmd)
+            return
+    dest = os.path.join(runners.data_dir(), "umu")
+    inst.note(f"download umu-launcher's self-contained build (github.com/Open-Wine-Components/umu-launcher) "
+              f"into {dest}")
+    if inst.dry_run:
+        return
+    releases = json.loads(_fetch(UMU_RELEASES_API))
+    name, url = pick_release_asset(releases, [r"zipapp.*\.tar(\.gz|\.xz)?$"])
+    tmp = tempfile.mkdtemp(prefix="omnilaunch-")
+    archive = os.path.join(tmp, name)
+    inst.log(f"downloading {name} ...")
+    _fetch(url, archive)
+    os.makedirs(dest, exist_ok=True)
+    inst.run(["tar", "-xf", archive, "-C", dest])
+    shutil.rmtree(tmp, ignore_errors=True)
+    if not runners.find_umu():
+        raise SetupError("umu-launcher downloaded, but its umu-run program wasn't found inside.")
+
+
 def _install_rosetta(inst: Installer) -> None:
     inst.run(["sudo", "softwareupdate", "--install-rosetta", "--agree-to-license"])
 
@@ -203,6 +238,48 @@ def _install_linux_gui(inst: Installer) -> None:
     inst.run([engine or "docker", "build", "-t", LINUX_GUI_IMAGE, "-"], input=LINUX_GUI_DOCKERFILE.encode())
 
 
+def _unzip(inst: Installer, archive: str, dest: str) -> None:
+    os.makedirs(dest, exist_ok=True)
+    if runners.HOST_OS != "windows" and runners.which("unzip"):
+        inst.run(["unzip", "-q", "-o", archive, "-d", dest])      # keeps the executable flags
+        return
+    inst.log(f"$ unzip {archive} -> {dest}")
+    if not inst.dry_run:
+        import zipfile
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(dest)
+
+
+def _install_android(inst: Installer) -> None:
+    from . import android
+    sdk = android.sdk_root()
+    abi = android.guest_abi()
+    inst.note(f"download Google's Android Emulator, platform tools and an Android {android.PREFERRED_API} "
+              f"({abi}) system image into {sdk} (about 2 GB)")
+    if inst.dry_run:
+        inst.note(f"create the '{android.AVD_NAME}' virtual device")
+        return
+    tmp = tempfile.mkdtemp(prefix="omnilaunch-android-")
+    try:
+        emulator_url = android.pick_emulator_url(_fetch(android.REPO_INDEX))
+        api, image_url = android.pick_system_image(_fetch(android.SYSIMG_INDEX), abi)
+        for label, url, dest in (
+                ("platform tools", android.platform_tools_url(), sdk),
+                ("emulator", emulator_url, sdk),
+                (f"Android {api} system image", image_url,
+                 os.path.join(sdk, "system-images", f"android-{api}", "google_apis"))):
+            archive = os.path.join(tmp, os.path.basename(url))
+            inst.log(f"downloading {label} ...")
+            _fetch(url, archive)
+            _unzip(inst, archive, dest)
+        android.write_avd(api, abi)
+        inst.log(f"created the '{android.AVD_NAME}' virtual device (Android {api})")
+    except ValueError as e:
+        raise SetupError(str(e))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _install_darling(inst: Installer) -> None:
     raise ManualStep("Darling has no ready-made packages for most Linux distributions. Follow "
                      "https://docs.darlinghq.org/build-instructions.html (about an hour to build).")
@@ -215,7 +292,7 @@ def components() -> dict[str, Component]:
     out: list[Component] = []
     if host in ("linux", "macos"):
         out.append(Component("wine", "Wine (runs Windows apps)", lambda: bool(runners.find_wine()), _install_wine,
-                             requires=["rosetta"] if host == "macos" and arch == "arm64" else []))
+                             requires=["rosetta"] if host == "macos" and arch == "arm64" else [], size="about 400 MB"))
         out.append(Component("container", "Container engine (runs Linux apps)" if host == "macos"
                              else "Container engine (runs Linux apps in a sandbox)",
                              lambda: bool(runners.find_container_engine()), _install_container))
@@ -227,10 +304,23 @@ def components() -> dict[str, Component]:
                              runners.xquartz_installed, _install_xquartz,
                              note="Log out and back in once so XQuartz picks up its new settings."))
         out.append(Component("linux-gui", "Linux graphical app support", runners.linux_gui_image_ready,
-                             _install_linux_gui, requires=["container", "xquartz"]))
+                             _install_linux_gui, requires=["container", "xquartz"], size="about 600 MB"))
+    if host == "linux" and arch == "x86_64":
+        out.append(Component("proton", "Proton via umu-launcher (best for Windows games)",
+                             lambda: bool(runners.find_umu()), _install_proton, size="about 1 GB with the first game"))
     if host == "linux":
         out.append(Component("darling", "Darling (runs Mac command-line tools)", lambda: bool(runners.which("darling")),
                              _install_darling))
+    if host == "linux" and runners.which("waydroid"):
+        pass   # Waydroid already provides Android apps
+    else:
+        from . import android
+        notes = {"windows": "If the emulator won't start, turn on 'Windows Hypervisor Platform' in "
+                            "Windows Features and restart.",
+                 "linux": "The emulator needs KVM: make sure virtualization is on in your BIOS and your user "
+                          "is in the 'kvm' group."}
+        out.append(Component("android", "Android apps (Google's Android Emulator)", android.emulator_ready,
+                             _install_android, note=notes.get(host, ""), size="about 2 GB"))
     if host == "windows":
         out.append(Component("wsl", "WSL (runs Linux apps)", lambda: bool(runners.wsl_distros()), _install_wsl,
                              note="Restart Windows, then finish the Ubuntu setup window that opens."))
@@ -238,19 +328,19 @@ def components() -> dict[str, Component]:
 
 
 def install(name: str, dry_run: bool = False, log: Callable[[str], None] = print,
-            _seen: set | None = None) -> Installer:
+            _seen: set | None = None, gui: bool = False) -> Installer:
     comps = components()
     if name not in comps:
         available = ", ".join(comps) or "none"
         raise SetupError(f"'{name}' isn't something OmniLaunch can set up on this computer. Available: {available}")
-    inst = Installer(dry_run=dry_run, log=log)
+    inst = Installer(dry_run=dry_run, log=log, gui=gui)
     _seen = _seen if _seen is not None else set()
     _seen.add(name)
     comp = comps[name]
     for dep in comp.requires:
         if dep not in _seen and dep in comps and not comps[dep].is_installed():
             _seen.add(dep)
-            sub = install(dep, dry_run, log, _seen)
+            sub = install(dep, dry_run, log, _seen, gui)
             inst.steps += sub.steps
     if comp.is_installed() and not dry_run:
         log(f"{comp.label}: already installed.")
@@ -262,27 +352,40 @@ def install(name: str, dry_run: bool = False, log: Callable[[str], None] = print
     return inst
 
 
-def offer(name: str, assume_yes: bool) -> bool:
-    """Ask (in a terminal) whether to install a missing component. Returns True if it got installed."""
+def offer(name: str, assume_yes: bool, gui: bool = False) -> bool:
+    """Ask whether to install a missing component (in the terminal, or in a dialog when `gui`).
+    Returns True if it got installed."""
+    from . import desktop
     comps = components()
     if name not in comps:
         return False
     comp = comps[name]
+    size = f" ({comp.size})" if comp.size else ""
     if not assume_yes:
-        if not (sys.stdin.isatty() and sys.stdout.isatty()):
-            return False
-        try:
-            answer = input(f"{comp.label} is needed and isn't installed. Install it now? [Y/n] ").strip().lower()
-        except EOFError:
-            return False
-        if answer not in ("", "y", "yes"):
-            return False
+        if gui:
+            if not desktop.ask("OmniLaunch", f"To open this app, OmniLaunch needs {comp.label}{size}, "
+                                              "which isn't installed yet.\n\nInstall it now?"):
+                return False
+        else:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                return False
+            try:
+                answer = input(f"{comp.label}{size} is needed and isn't installed. Install it now? [Y/n] ")
+            except EOFError:
+                return False
+            if answer.strip().lower() not in ("", "y", "yes"):
+                return False
+    if gui:
+        desktop.notify("OmniLaunch", f"Installing {comp.label}. This can take a few minutes...")
     try:
-        install(name)
-    except ManualStep as e:
-        print(f"Can't install automatically: {e}", file=sys.stderr)
+        install(name, gui=gui, log=(lambda _m: None) if gui else print)
+    except (ManualStep, SetupError) as e:
+        msg = ("Can't install automatically: " if isinstance(e, ManualStep) else "Setup failed: ") + str(e)
+        desktop.alert("OmniLaunch", msg) if gui else print(msg, file=sys.stderr)
         return False
-    except SetupError as e:
-        print(f"Setup failed: {e}", file=sys.stderr)
-        return False
-    return comp.is_installed()
+    if comp.note:
+        desktop.alert("OmniLaunch", comp.note) if gui else None
+    ok = comp.is_installed()
+    if gui and ok:
+        desktop.notify("OmniLaunch", f"{comp.label} is ready.")
+    return ok

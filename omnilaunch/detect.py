@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import plistlib
 import struct
+import zipfile
 from dataclasses import dataclass
 from enum import Enum
 
@@ -13,6 +14,7 @@ class Platform(str, Enum):
     LINUX = "linux"
     WINDOWS = "windows"
     MACOS = "macos"
+    ANDROID = "android"
     SCRIPT = "script"
     ARCHIVE = "archive"    # .dmg / .zip etc: needs extracting before it can run
     UNKNOWN = "unknown"
@@ -28,6 +30,7 @@ class AppInfo:
     archs: tuple = ()    # all architectures in a universal (fat) Mac binary
     interpreter: str = ""  # shebang line for scripts, e.g. "/usr/bin/env python3"
     gui: bool = False      # Linux apps: does it open windows (links X11/GTK/Qt/Wayland/SDL)?
+    package: str = ""      # Android apps: package name, e.g. "org.mozilla.firefox"
 
 
 ELF_MACHINES = {0x03: "x86", 0x3E: "x86_64", 0x28: "arm", 0xB7: "arm64", 0xF3: "riscv"}
@@ -86,10 +89,93 @@ def detect(path: str) -> AppInfo:
         return AppInfo(path, path, Platform.SCRIPT, kind="script", interpreter=line)
     if lower.endswith(WINDOWS_EXTS):
         return AppInfo(path, path, Platform.WINDOWS, kind=os.path.splitext(lower)[1].lstrip(".").upper())
+    if head.startswith(b"PK\x03\x04") or lower.endswith((".apk", ".xapk", ".apks", ".aab")):
+        android = _android(path, lower)
+        if android:
+            return android
     if lower.endswith(ARCHIVE_EXTS) or head.startswith(b"PK\x03\x04"):
         ext = next((e for e in ARCHIVE_EXTS if lower.endswith(e)), ".zip")
         return AppInfo(path, path, Platform.ARCHIVE, kind=ext.lstrip(".").upper())
     return AppInfo(path, path, Platform.UNKNOWN, kind="unrecognised format")
+
+
+ANDROID_ABIS = {"arm64-v8a": "arm64", "armeabi-v7a": "arm", "armeabi": "arm", "x86_64": "x86_64", "x86": "x86"}
+
+
+def _android(path: str, lower: str) -> AppInfo | None:
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            if lower.endswith((".xapk", ".apks", ".aab")) or "AndroidManifest.xml" not in names:
+                if lower.endswith((".xapk", ".apks", ".aab")):
+                    return AppInfo(path, path, Platform.ANDROID, kind=f"{lower.rsplit('.', 1)[1].upper()} bundle")
+                return None
+            manifest = z.read("AndroidManifest.xml")
+    except (zipfile.BadZipFile, OSError, KeyError):
+        return None
+    abis = sorted({ANDROID_ABIS[n.split("/")[1]] for n in names
+                   if n.startswith("lib/") and n.count("/") >= 2 and n.split("/")[1] in ANDROID_ABIS})
+    info = AppInfo(path, path, Platform.ANDROID, "any" if not abis else (abis[0] if len(abis) == 1 else "multi"),
+                   "APK", archs=tuple(abis))
+    try:
+        info.package = axml_manifest_package(manifest)
+    except (struct.error, IndexError, ValueError):
+        pass
+    return info
+
+
+def axml_manifest_package(data: bytes) -> str:
+    """Read the package name from a compiled (binary XML) AndroidManifest.xml."""
+    if struct.unpack_from("<H", data, 0)[0] != 0x0003:
+        raise ValueError("not binary XML")
+    strings: list[str] = []
+    pos = struct.unpack_from("<H", data, 2)[0]
+    while pos + 8 <= len(data):
+        ctype, header_size, size = struct.unpack_from("<HHI", data, pos)
+        if size < 8:
+            break
+        if ctype == 0x0001:                       # string pool
+            strings = _axml_strings(data, pos)
+        elif ctype == 0x0102:                     # start element
+            ext = pos + header_size
+            _ns, name, attr_start, attr_size, count = struct.unpack_from("<IIHHH", data, ext)
+            if name < len(strings) and strings[name] == "manifest":
+                for i in range(count):
+                    a = ext + attr_start + i * attr_size
+                    _ans, aname, raw = struct.unpack_from("<III", data, a)
+                    if aname < len(strings) and strings[aname] == "package" and raw < len(strings):
+                        return strings[raw]
+                raise ValueError("manifest has no package attribute")
+        pos += size
+    raise ValueError("no manifest element")
+
+
+def _axml_strings(data: bytes, chunk: int) -> list[str]:
+    header_size = struct.unpack_from("<H", data, chunk + 2)[0]
+    count, _styles, flags, strings_start = struct.unpack_from("<IIII", data, chunk + 8)
+    utf8 = bool(flags & 0x100)
+    offsets = struct.unpack_from(f"<{count}I", data, chunk + header_size)
+    base = chunk + strings_start
+    out = []
+    for off in offsets:
+        p = base + off
+        if utf8:
+            p += 2 if data[p] & 0x80 else 1                  # UTF-16 length (unused)
+            n = data[p]
+            if n & 0x80:
+                n = ((n & 0x7F) << 8) | data[p + 1]
+                p += 2
+            else:
+                p += 1
+            out.append(data[p:p + n].decode("utf-8", errors="replace"))
+        else:
+            n = struct.unpack_from("<H", data, p)[0]
+            p += 2
+            if n & 0x8000:
+                n = ((n & 0x7FFF) << 16) | struct.unpack_from("<H", data, p)[0]
+                p += 2
+            out.append(data[p:p + 2 * n].decode("utf-16-le", errors="replace"))
+    return out
 
 
 def _elf(path: str, head: bytes) -> AppInfo:

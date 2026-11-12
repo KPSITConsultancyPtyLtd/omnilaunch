@@ -12,7 +12,7 @@ from . import __version__, desktop, envs, provision, runners, vms
 from .detect import detect
 from .runners import RUNNERS, UnsupportedApp, plan, which
 
-RUN_FLAGS = {"--dry-run", "--verbose", "-v", "--notify", "--yes", "-y"}
+RUN_FLAGS = {"--dry-run", "--verbose", "-v", "--notify", "--gui", "--yes", "-y"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,7 +26,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--dry-run", action="store_true", help="show what would run, don't run it")
     run.add_argument("--runner", choices=RUNNERS, help="force a compatibility layer")
     run.add_argument("-v", "--verbose", action="store_true", help="show compatibility-layer debug output")
-    run.add_argument("--notify", action="store_true", help="report errors as desktop notifications")
+    run.add_argument("--gui", action="store_true",
+                     help="no terminal: ask and report with dialogs (used when an app is double-clicked)")
+    run.add_argument("--notify", action="store_true", help=argparse.SUPPRESS)   # old name for --gui
+    run.add_argument("--env", help="run inside an existing environment (see `omnilaunch envs list`)")
     run.add_argument("-y", "--yes", action="store_true", help="install missing helpers without asking")
     run.add_argument("app")
     run.add_argument("args", nargs=argparse.REMAINDER)
@@ -104,6 +107,9 @@ def _absorb_trailing_flags(ns: argparse.Namespace) -> None:
         elif a == "--runner" and i + 1 < len(args) and args[i + 1] in RUNNERS:
             ns.runner = args[i + 1]
             i += 1
+        elif a == "--env" and i + 1 < len(args):
+            ns.env = args[i + 1]
+            i += 1
         elif a.startswith("--runner=") and a.split("=", 1)[1] in RUNNERS:
             ns.runner = a.split("=", 1)[1]
         else:
@@ -125,6 +131,8 @@ def _info(app: str) -> int:
     arch = i.arch if not (i.arch == "universal" and i.archs) else f"universal ({', '.join(i.archs)})"
     print(f"Arch:      {arch}")
     print(f"Format:    {i.kind}")
+    if i.package:
+        print(f"Package:   {i.package}")
     if i.platform.value == "linux":
         print(f"GUI:       {'yes (opens windows)' if i.gui else 'no (command-line app)'}")
     try:
@@ -136,41 +144,42 @@ def _info(app: str) -> int:
     return 0
 
 
-def _fail(msg: str, hint: str, notify: bool, code: int) -> int:
+def _fail(msg: str, hint: str, gui: bool, code: int) -> int:
     print(f"Can't run this app: {msg}", file=sys.stderr)
     if hint:
         print(f"  -> {hint}", file=sys.stderr)
-    if notify:
-        desktop.notify("Can't run this app", f"{msg}\n{hint}".strip())
+    if gui:
+        desktop.alert("OmniLaunch can't open this app", f"{msg}\n\n{hint}".strip())
     return code
 
 
 def _run(ns: argparse.Namespace) -> int:
+    gui = ns.gui or ns.notify
     offered: set = set()
     while True:
         try:
             info = detect(ns.app)
-            lp = plan(info, ns.args, runner=ns.runner, verbose=ns.verbose)
+            lp = plan(info, ns.args, runner=ns.runner, verbose=ns.verbose, env_name=ns.env)
             break
         except FileNotFoundError:
-            return _fail(f"no such file: {ns.app}", "", ns.notify, 2)
+            return _fail(f"no such file: {ns.app}", "", gui, 2)
         except UnsupportedApp as e:
             # A helper is missing: offer to install it, then try again (once per helper).
-            if e.needs and e.needs not in offered and not ns.dry_run and not ns.notify:
+            if e.needs and e.needs not in offered and not ns.dry_run:
                 offered.add(e.needs)
-                if provision.offer(e.needs, assume_yes=ns.yes):
+                if provision.offer(e.needs, assume_yes=ns.yes, gui=gui):
                     continue
             hint = e.hint
             if e.needs and e.needs in provision.components():
                 hint = f"Run: omnilaunch setup {e.needs}"
-            return _fail(str(e), hint, ns.notify, 3)
+            return _fail(str(e), hint, gui, 3)
 
     print(f"[omnilaunch] {info.platform.value} app ({info.kind}, {info.arch}) -> {lp.runner}", file=sys.stderr)
     for n in lp.notes:
         print(f"[omnilaunch] {n}", file=sys.stderr)
     if ns.dry_run:
-        for argv, _required in lp.pre:
-            print("before: " + _quote(argv))
+        for step, _required in lp.pre:
+            print("before: " + (step.__doc__ or step.__name__ if callable(step) else _quote(step)))
         if lp.cwd:
             print(f"cd {_quote([lp.cwd])}")
         for k, v in lp.env.items():
@@ -180,15 +189,23 @@ def _run(ns: argparse.Namespace) -> int:
 
     if lp.prefix:
         envs.record_launch(lp.prefix, info.path)
-    for argv, required in lp.pre:
+    for step, required in lp.pre:
         try:
-            ok = subprocess.run(argv, capture_output=not required).returncode == 0
-        except OSError:
+            if callable(step):
+                if gui and step.__doc__:
+                    desktop.notify("OmniLaunch", step.__doc__[0].upper() + step.__doc__[1:] + "...")
+                ok = bool(step())
+            else:
+                ok = subprocess.run(step, capture_output=not required).returncode == 0
+        except (OSError, subprocess.SubprocessError):
             ok = False
         if required and not ok:
-            return _fail(f"preparing the launch failed: {' '.join(argv)}", "", ns.notify, 4)
+            what = step.__doc__ if callable(step) else " ".join(step)
+            return _fail(f"preparing the launch failed: {what}", "", gui, 4)
     env = {**os.environ, **lp.env}
     try:
+        if lp.prefix and lp.runner.startswith(("wine", "proton")):
+            return _run_windows_app(lp, env, gui)
         if os.name == "nt":
             # Windows has no real exec(): run the app as a child and pass its exit code through.
             return subprocess.call(lp.argv, cwd=lp.cwd or None, env=env)
@@ -196,10 +213,33 @@ def _run(ns: argparse.Namespace) -> int:
             os.chdir(lp.cwd)
         os.execvpe(lp.argv[0], lp.argv, env)  # replace ourselves with the app
     except OSError as e:
-        return _fail(f"launch failed: {e.strerror or e} ({lp.argv[0]})", "", ns.notify, 4)
+        return _fail(f"launch failed: {e.strerror or e} ({lp.argv[0]})", "", gui, 4)
     except KeyboardInterrupt:
         return 130
     return 0  # unreachable
+
+
+def _run_windows_app(lp, env: dict, gui: bool) -> int:
+    """Run a Windows app and wait, so programs it installs can be added to this computer's app list."""
+    from . import shortcuts
+    before = shortcuts.find_shortcuts(lp.prefix)
+    code = subprocess.call(lp.argv, cwd=lp.cwd or None, env=env)
+    # Installers often hand off to a child process and exit early: wait for everything in the environment.
+    wineserver = os.path.join(os.path.dirname(lp.argv[0]), "wineserver")
+    if "WINEPREFIX" in env and os.path.exists(wineserver):
+        try:
+            subprocess.run([wineserver, "-w"], env=env, timeout=3600)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    env_name = os.path.relpath(lp.prefix, os.path.join(runners.data_dir(), "prefixes")).replace(os.sep, "/")
+    added = shortcuts.add_new_programs(lp.prefix, env_name, before)
+    if added:
+        where = "Applications > OmniLaunch Apps" if runners.HOST_OS == "macos" else "your app menu"
+        msg = f"Installed {', '.join(added)}. Find it in {where}."
+        print(f"[omnilaunch] {msg}", file=sys.stderr)
+        if gui:
+            desktop.notify("OmniLaunch", msg)
+    return code
 
 
 def _quote(argv: list) -> str:
@@ -221,8 +261,8 @@ def _doctor() -> int:
         rows.append(("Linux apps (container, alternative to WSL)", bool(engine),
                      "optional: Docker Desktop or Podman Desktop"))
         rows.append(("Mac apps", False, "not possible on Windows"))
-        rows.append(("Double-click .AppImage files",
-                     desktop.windows_integrated(), "run: omnilaunch integrate"))
+        rows.append(("Double-click .apk/.AppImage files",
+                     desktop.windows_integrated(), "omnilaunch integrate"))
         if distros:
             print("  WSL Linux: " + ", ".join(distros) + "\n")
     elif runners.HOST_OS == "macos":
@@ -239,8 +279,8 @@ def _doctor() -> int:
         proton = os.environ.get("OMNILAUNCH_PROTON")
         rows.append(("Linux apps", True, ""))
         rows.append(("Windows apps (Wine)", bool(wine), "omnilaunch setup wine"))
-        rows.append(("Windows games (Proton)", bool(proton and os.path.exists(proton)),
-                     "set OMNILAUNCH_PROTON=/path/to/proton"))
+        rows.append(("Windows games (Proton via umu-launcher)",
+                     bool(runners.find_umu() or (proton and os.path.exists(proton))), "omnilaunch setup proton"))
         rows.append(("macOS apps (Darling)", bool(which("darling")), "see https://www.darlinghq.org"))
         if runners.HOST_ARCH not in ("x86_64", "x86"):
             rows.append(("x86 apps on this CPU", bool(which("box64", "FEXInterpreter", "qemu-x86_64")),
@@ -248,6 +288,11 @@ def _doctor() -> int:
         rows.append(("Double-click integration",
                      os.path.exists(os.path.join(desktop.applications_dir(), desktop.DESKTOP_ID)),
                      "run: omnilaunch integrate"))
+    from . import android
+    rows.append(("Android apps (.apk)", bool(android.waydroid()) or android.emulator_ready(),
+                 "omnilaunch setup android"))
+    if runners.HOST_OS == "macos":
+        rows.append(("Double-click .exe/.msi/.apk/.AppImage", desktop.mac_integrated(), "omnilaunch integrate"))
     for label, ok, fix in rows:
         print(f"  [{'OK ' if ok else '-- '}] {label}" + ("" if ok else f"  ({fix})"))
     cfg = vms.get("windows")

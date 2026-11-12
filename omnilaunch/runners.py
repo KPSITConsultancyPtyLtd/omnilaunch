@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from .detect import AppInfo, Platform
 
-RUNNERS = ("native", "wine", "proton", "darling", "container", "wsl", "vm")
+RUNNERS = ("native", "wine", "proton", "darling", "container", "wsl", "vm", "android")
 
 HOST_OS = {"darwin": "macos", "linux": "linux", "win32": "windows", "cygwin": "windows"}.get(
     sys.platform, "linux" if sys.platform.startswith("linux") else sys.platform)
@@ -106,6 +106,19 @@ def find_wine() -> str | None:
     return None
 
 
+def find_umu() -> str | None:
+    """umu-launcher's umu-run: from the system, or the copy `omnilaunch setup proton` downloaded."""
+    if HOST_OS != "linux":
+        return None
+    found = which("umu-run")
+    if found:
+        return found
+    for path in sorted(glob.glob(os.path.join(data_dir(), "umu", "**", "umu-run"), recursive=True)):
+        if os.access(path, os.X_OK):
+            return path
+    return None
+
+
 def find_container_engine() -> str | None:
     return which("docker", "podman")
 
@@ -180,6 +193,8 @@ def app_id(info: AppInfo) -> str:
 
 
 def default_runner(info: AppInfo) -> str:
+    if info.platform == Platform.ANDROID:
+        return "android"
     if HOST_OS == "windows":
         if info.platform == Platform.WINDOWS:
             return "native"
@@ -187,10 +202,15 @@ def default_runner(info: AppInfo) -> str:
             return "native"   # explained as unsupported by _windows_native
         return "wsl" if find_wsl() or not find_container_engine() else "container"
     if info.platform == Platform.WINDOWS:
-        if os.environ.get("OMNILAUNCH_PROTON") and HOST_OS == "linux":
+        if HOST_OS == "linux" and (find_umu() or os.environ.get("OMNILAUNCH_PROTON")):
             return "proton"
+        if find_wine():
+            return "wine"
         from . import vms
-        return "vm" if not find_wine() and vms.get("windows") else "wine"
+        if vms.get("windows"):
+            return "vm"
+        # Nothing installed yet: on x86 Linux offer Proton (best for games), elsewhere Wine.
+        return "proton" if HOST_OS == "linux" and HOST_ARCH == "x86_64" else "wine"
     if info.platform == Platform.SCRIPT:
         return "native"
     if HOST_OS == "macos":
@@ -199,11 +219,19 @@ def default_runner(info: AppInfo) -> str:
 
 
 def plan(info: AppInfo, args: list[str] | None = None, runner: str | None = None,
-         verbose: bool = False) -> LaunchPlan:
-    """Build a launch plan. `runner` forces a specific layer instead of auto-picking."""
+         verbose: bool = False, env_name: str | None = None) -> LaunchPlan:
+    """Build a launch plan. `runner` forces a specific layer; `env_name` reuses an existing environment
+    (e.g. "wine/setup-1a2b3c4d") so programs installed there run with their settings and files."""
     args = list(args or [])
     if runner and runner not in RUNNERS:
         raise UnsupportedApp(f"Unknown runner '{runner}'.", f"Choose one of: {', '.join(RUNNERS)}")
+    if env_name:
+        env_root = os.path.join(data_dir(), "prefixes", env_name)
+        if not os.path.isdir(env_root):
+            raise UnsupportedApp(f"There's no environment called '{env_name}'.", "See: omnilaunch envs list")
+        runner = runner or env_name.split("/", 1)[0]
+    if info.platform == Platform.ARCHIVE and info.kind in ("DMG", "PKG"):
+        return _mac_package(info)
     if info.platform == Platform.ARCHIVE:
         raise UnsupportedApp(
             f"{os.path.basename(info.path)} is an archive ({info.kind}), not an app.",
@@ -223,13 +251,18 @@ def plan(info: AppInfo, args: list[str] | None = None, runner: str | None = None
         else:
             lp = _linux_native(info, args)
     elif target in ("wine", "proton"):
-        lp = _windows(info, args, target, verbose)
+        lp = _windows(info, args, target, verbose, env_name)
     elif target == "container":
         lp = _container(info, args)
     elif target == "wsl":
         lp = _wsl(info, args)
     elif target == "vm":
         lp = _vm(info, args)
+    elif target == "android":
+        if info.platform != Platform.ANDROID:
+            raise UnsupportedApp("The Android runner only runs Android apps (.apk).")
+        from . import android
+        lp = android.plan(info, args)
     else:
         lp = _darling(info, args)
     if lp.cwd is None:
@@ -396,6 +429,59 @@ def _vm(info: AppInfo, args: list[str]) -> LaunchPlan:
     return vms.plan_windows_app(info, args)
 
 
+# ---------------------------------------------------------------- Mac disk images and installers
+
+def _mac_package(info: AppInfo) -> LaunchPlan:
+    name = os.path.basename(info.path)
+    if HOST_OS != "macos":
+        where = "Windows" if HOST_OS == "windows" else "Linux"
+        raise UnsupportedApp(
+            f"{name} is a Mac app installer, and Mac apps can't be installed on {where}.",
+            "Look for the " + where + " version of this app on the developer's website. (Nothing can run Mac "
+            "apps on " + where + ", and Apple's licence only allows macOS on Apple hardware.)")
+    if info.kind == "PKG":
+        return LaunchPlan("install (macOS Installer)", ["/usr/bin/open", "-W", info.path],
+                          notes=["Opening Apple's Installer for this package."])
+    lp = LaunchPlan("install (disk image)", ["/usr/bin/true"],
+                    notes=["Copies the app from the disk image into Applications, then opens it."])
+
+    def install_from_dmg() -> bool:
+        """mount the disk image, copy its app into ~/Applications, then unmount it"""
+        import tempfile
+        mount = tempfile.mkdtemp(prefix="omnilaunch-dmg-")
+        # Some disk images show a licence; answering Y accepts it, as double-clicking would ask you to.
+        r = subprocess.run(["/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen",
+                            "-mountpoint", mount, info.path], input=b"Y\n", capture_output=True)
+        if r.returncode != 0:
+            return False
+        try:
+            items = sorted(os.listdir(mount))
+            apps = [i for i in items if i.endswith(".app")]
+            pkgs = [i for i in items if i.endswith((".pkg", ".mpkg"))]
+            if apps:
+                dest_dir = "/Applications" if os.access("/Applications", os.W_OK) else os.path.expanduser("~/Applications")
+                os.makedirs(dest_dir, exist_ok=True)
+                dest = os.path.join(dest_dir, apps[0])
+                if os.path.exists(dest):
+                    shutil.rmtree(dest)
+                subprocess.run(["/usr/bin/ditto", os.path.join(mount, apps[0]), dest], check=True)
+                lp.argv = ["/usr/bin/open", dest]
+                lp.notes.append(f"Installed {apps[0]} into {dest_dir}.")
+                return True
+            if pkgs:
+                import tempfile as _t
+                copy = os.path.join(_t.mkdtemp(prefix="omnilaunch-pkg-"), pkgs[0])
+                subprocess.run(["/usr/bin/ditto", os.path.join(mount, pkgs[0]), copy], check=True)
+                lp.argv = ["/usr/bin/open", "-W", copy]
+                return True
+            return False
+        finally:
+            subprocess.run(["/usr/bin/hdiutil", "detach", mount, "-quiet"], check=False)
+
+    lp.pre = [(install_from_dmg, True)]
+    return lp
+
+
 # ---------------------------------------------------------------- Windows host
 
 def _windows_native(info: AppInfo, args: list[str]) -> LaunchPlan:
@@ -451,7 +537,8 @@ def _wsl(info: AppInfo, args: list[str]) -> LaunchPlan:
 
 # ---------------------------------------------------------------- Windows apps on Linux/macOS
 
-def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool) -> LaunchPlan:
+def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
+             env_name: str | None = None) -> LaunchPlan:
     if info.platform not in (Platform.WINDOWS, Platform.UNKNOWN):
         raise UnsupportedApp(f"Wine and Proton run Windows apps, but this is a {info.platform.value} app.")
     if HOST_OS == "windows":
@@ -459,7 +546,7 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool) -> Laun
     if "DLL" in info.kind:
         raise UnsupportedApp(f"{os.path.basename(info.path)} is a Windows library (DLL), not an app.",
                              "Run the .exe that uses it instead.")
-    root = os.path.join(data_dir(), "prefixes", runner, app_id(info))
+    root = os.path.join(data_dir(), "prefixes", env_name or os.path.join(runner, app_id(info)))
     notes = [f"Isolated Windows environment: {root}"]
     if not os.path.isdir(os.path.join(root, "drive_c")) and not os.path.isdir(os.path.join(root, "pfx")):
         notes.append("First launch: setting up the Windows environment can take a minute.")
@@ -467,18 +554,31 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool) -> Laun
         notes.append("x86 Windows app on an ARM host: needs Wine built with box64/FEX (e.g. via Hangover).")
     ext = os.path.splitext(info.executable.lower())[1]
 
+    special = {".msi": ["msiexec", "/i"], ".bat": ["cmd", "/c"], ".cmd": ["cmd", "/c"], ".lnk": ["start", "/unix"]}
     if runner == "proton":
         if HOST_OS != "linux":
             raise UnsupportedApp("Proton only runs on Linux.", "Use --runner wine.")
         proton = os.environ.get("OMNILAUNCH_PROTON")
+        umu = find_umu()
+        env = {} if verbose else {"WINEDEBUG": "-all"}
+        if umu:
+            # umu-launcher runs Proton inside Valve's Steam Linux Runtime, exactly as Steam would,
+            # downloading Proton itself the first time. This is what makes most games just work.
+            env.update({"WINEPREFIX": root, "GAMEID": os.environ.get("OMNILAUNCH_GAMEID", "0"),
+                        "WINEDLLOVERRIDES": "winemenubuilder.exe=d"})
+            if proton and os.path.exists(proton):
+                env["PROTONPATH"] = os.path.dirname(os.path.abspath(proton))
+            notes.append("Running through Proton (umu-launcher). The first launch downloads Proton and "
+                         "the Steam runtime, which takes a few minutes.")
+            return LaunchPlan("proton (umu)", [umu, *special.get(ext, []), info.executable, *args],
+                              env, notes, prefix=root)
         if not proton or not os.path.exists(proton):
-            raise UnsupportedApp("Proton isn't configured.",
-                                 "Set OMNILAUNCH_PROTON=/path/to/proton (the 'proton' script in a Proton folder).")
-        env = {"STEAM_COMPAT_DATA_PATH": root,
-               "STEAM_COMPAT_CLIENT_INSTALL_PATH": os.path.expanduser("~/.steam/steam")}
-        if not verbose:
-            env["WINEDEBUG"] = "-all"
-        return LaunchPlan("proton", [proton, "run", info.executable, *args], env, notes, prefix=root)
+            raise UnsupportedApp("Proton (the best way to run Windows games on Linux) isn't installed.",
+                                 "Run: omnilaunch setup proton", needs="proton")
+        env.update({"STEAM_COMPAT_DATA_PATH": root,
+                    "STEAM_COMPAT_CLIENT_INSTALL_PATH": os.path.expanduser("~/.steam/steam")})
+        return LaunchPlan("proton", [proton, "run", *special.get(ext, []), info.executable, *args],
+                          env, notes, prefix=root)
 
     wine = find_wine()
     if not wine:
@@ -487,11 +587,11 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool) -> Laun
         raise UnsupportedApp("This is a Windows app and Wine isn't installed.", hint, needs="wine")
     if HOST_OS == "macos" and HOST_ARCH == "arm64" and not rosetta_installed():
         notes.append("Wine on Apple Silicon needs Rosetta 2: softwareupdate --install-rosetta --agree-to-license")
-    env = {"WINEPREFIX": root}
+    # Wine's own menu-entry maker is off: OmniLaunch adds installed programs to the app menu itself.
+    env = {"WINEPREFIX": root, "WINEDLLOVERRIDES": "winemenubuilder.exe=d"}
     if not verbose:
         env["WINEDEBUG"] = "-all"
 
-    special = {".msi": ["msiexec", "/i"], ".bat": ["cmd", "/c"], ".cmd": ["cmd", "/c"], ".lnk": ["start", "/unix"]}
     argv = [wine, *special.get(ext, []), info.executable, *args]
     label = f"wine ({ext.lstrip('.')})" if ext in special else "wine"
     return LaunchPlan(label, argv, env, notes, prefix=root)

@@ -37,12 +37,14 @@ class ProvisionTests(TmpCase):
             provision.install("nope", dry_run=True)
 
     def test_components_per_host(self):
-        self.assertIn("darling", provision.components())
+        self.assertEqual(set(provision.components()), {"wine", "container", "proton", "darling", "android"})
+        self.host("linux", "arm64")
+        self.assertNotIn("proton", provision.components())      # umu-launcher is x86_64-only
         self.host("windows", "x86_64")
-        self.assertEqual(list(provision.components()), ["wsl"])
+        self.assertEqual(set(provision.components()), {"android", "wsl"})
         self.host("macos", "arm64")
         self.assertEqual(set(provision.components()),
-                         {"wine", "container", "rosetta", "xquartz", "linux-gui"})
+                         {"wine", "container", "rosetta", "xquartz", "linux-gui", "android"})
         self.host("macos", "x86_64")
         self.assertNotIn("rosetta", provision.components())
 
@@ -102,12 +104,13 @@ class ProvisionTests(TmpCase):
         self.assertIn(b"libgtk-3-0", kw["input"])
 
     def test_run_offers_install_then_retries(self):
+        self.host("linux", "arm64")   # Wine is the default here (Proton is x86-only)
         self.with_tools()   # no wine yet
         app = _write(self.d, "a.exe", fake_pe())
         state = {"installed": False}
 
-        def fake_offer(name, assume_yes):
-            self.assertEqual((name, assume_yes), ("wine", True))
+        def fake_offer(name, assume_yes, gui=False):
+            self.assertEqual((name, assume_yes, gui), ("wine", True, False))
             state["installed"] = True
             return True
 
@@ -122,11 +125,10 @@ class ProvisionTests(TmpCase):
         self.assertIn("omnilaunch setup wine", out)
         with mock.patch.object(provision, "offer", fake_offer), \
                 mock.patch.object(runners, "find_wine", fake_find_wine), \
-                mock.patch.object(cli.os, "execvpe") as execvpe, \
-                mock.patch.object(cli.os, "chdir"), \
-                mock.patch.object(cli.os, "name", "posix"):
-            quiet(cli.main, ["run", "-y", app])
-        self.assertEqual(execvpe.call_args[0][1][:2], ["/usr/bin/wine", app])
+                mock.patch.object(cli.subprocess, "call", return_value=0) as call:
+            code, _ = quiet(cli.main, ["run", "-y", app])
+        self.assertEqual(code, 0)
+        self.assertEqual(call.call_args[0][0][:2], ["/usr/bin/wine", app])
 
     def test_offer_without_terminal_declines(self):
         with mock.patch.object(provision.sys.stdin, "isatty", return_value=False):

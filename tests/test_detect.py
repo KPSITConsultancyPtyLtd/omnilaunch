@@ -200,7 +200,14 @@ class PlanTests(TmpCase):
         lp = runners.plan(detect(_write(self.d, "a.exe", fake_pe())), verbose=True)
         self.assertNotIn("WINEDEBUG", lp.env)
 
-    def test_windows_without_wine_explains(self):
+    def test_windows_without_anything_offers_proton_on_x86_linux(self):
+        self.with_tools()
+        with self.assertRaises(runners.UnsupportedApp) as cm:
+            runners.plan(detect(_write(self.d, "app.exe", fake_pe())))
+        self.assertEqual(cm.exception.needs, "proton")
+
+    def test_windows_without_wine_explains_on_arm_linux(self):
+        self.host("linux", "arm64")
         self.with_tools()
         with self.assertRaises(runners.UnsupportedApp) as cm:
             runners.plan(detect(_write(self.d, "app.exe", fake_pe())))
@@ -229,8 +236,13 @@ class PlanTests(TmpCase):
 
     def test_archive_explains(self):
         with self.assertRaises(runners.UnsupportedApp) as cm:
+            runners.plan(detect(_write(self.d, "x.zip", b"PK\x03\x04")))
+        self.assertIn("Extract", cm.exception.hint)
+
+    def test_mac_installer_on_linux_explains(self):
+        with self.assertRaises(runners.UnsupportedApp) as cm:
             runners.plan(detect(_write(self.d, "x.dmg", b"")))
-        self.assertIn("7z", cm.exception.hint)
+        self.assertIn("Linux version", cm.exception.hint)
 
 
 class MacHostTests(TmpCase):
@@ -314,9 +326,27 @@ class MacHostTests(TmpCase):
             os.environ.pop("OMNILAUNCH_HOME")
             self.assertTrue(runners.data_dir().endswith("Library/Application Support/OmniLaunch"))
 
-    def test_integrate_not_supported(self):
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(cli.main(["integrate"]), 1)
+    def test_integrate_dry_run(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(cli.main(["integrate", "--dry-run"]), 0)
+        self.assertIn("OmniLaunch.app", out.getvalue())
+
+    def test_mac_app_declares_file_types(self):
+        plist = desktop.mac_info_plist_updates({})
+        exts = {e for d in plist["CFBundleDocumentTypes"] for e in d["CFBundleTypeExtensions"]}
+        self.assertTrue({"exe", "msi", "apk", "AppImage"} <= exts)
+        self.assertEqual(plist["CFBundleIdentifier"], desktop.MAC_BUNDLE_ID)
+        script = desktop.mac_applescript()
+        self.assertIn("on open theFiles", script)
+        self.assertIn("run --gui", script)
+        self.assertIn("quoted form of (POSIX path of f)", script)
+
+    def test_admin_commands_use_system_password_prompt(self):
+        argv = desktop.run_as_admin(["softwareupdate", "--install-rosetta"])
+        self.assertEqual(argv[0], "/usr/bin/osascript")
+        self.assertIn("with administrator privileges", " ".join(argv))
+        self.assertEqual(argv[-1], "softwareupdate --install-rosetta")
 
     def test_doctor_runs(self):
         self.with_tools()
@@ -461,7 +491,7 @@ class WindowsHostTests(TmpCase):
             with contextlib.redirect_stdout(out):
                 self.assertEqual(cli.main(["integrate"]), 0)
             cmd = reg.keys[r"Software\Classes\OmniLaunch.App\shell\open\command"][""]
-            self.assertTrue(cmd.endswith('run --notify "%1"'))
+            self.assertTrue(cmd.endswith('run --gui "%1"'))
             self.assertEqual(reg.keys[r"Software\Classes\.AppImage"][""], "OmniLaunch.App")
             self.assertTrue(desktop.windows_integrated())
             self.assertTrue(desktop.unintegrate())
@@ -522,7 +552,7 @@ class CliTests(TmpCase):
             path = os.path.join(self.d, "xdg", "applications", "omnilaunch.desktop")
             with open(path) as f:
                 text = f.read()
-            self.assertIn("run --notify %f", text)
+            self.assertIn("run --gui %f", text)
             self.assertIn("application/x-ms-dos-executable", text)
             self.run_cli("integrate", "--remove")
         self.assertFalse(os.path.exists(path))

@@ -1,4 +1,5 @@
-"""Hook OmniLaunch into the desktop (Linux and Windows) so double-clicking an app runs it."""
+"""Hook OmniLaunch into the desktop (Windows, macOS, Linux) so double-clicking an app runs it,
+and talk to the user with dialogs when there is no terminal."""
 
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ MIME_TYPES = [
     "application/x-mach-binary",
     "application/x-appimage",
     "application/vnd.appimage",
+    "application/vnd.android.package-archive",
 ]
 
 
@@ -55,7 +57,7 @@ def desktop_entry() -> str:
         "Type=Application",
         "Name=OmniLaunch",
         "Comment=Run Windows, macOS and Linux apps",
-        f"Exec={launcher_command()} run --notify %f",
+        f"Exec={launcher_command()} run --gui %f",
         "Icon=application-x-executable",
         "Terminal=false",
         "NoDisplay=true",
@@ -72,7 +74,7 @@ class NotSupportedHere(Exception):
 # ---------------------------------------------------------------- Windows: file association
 
 WIN_PROGID = "OmniLaunch.App"
-WIN_EXTENSIONS = [".AppImage"]   # Linux app files; Windows already opens .exe/.msi itself
+WIN_EXTENSIONS = [".AppImage", ".apk"]   # Linux and Android app files; Windows opens .exe/.msi itself
 
 
 def windows_command() -> str:
@@ -83,7 +85,7 @@ def windows_command() -> str:
     else:
         script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "omnilaunch")
         parts = [sys.executable, script]
-    return subprocess.list2cmdline([*parts, "run", "--notify"]) + ' "%1"'
+    return subprocess.list2cmdline([*parts, "run", "--gui"]) + ' "%1"'
 
 
 def _winreg():
@@ -162,10 +164,10 @@ def _notify_shell_of_change() -> None:
 def integrate(dry_run: bool = False) -> list[str]:
     if runners.HOST_OS == "windows":
         return _integrate_windows(dry_run)
+    if runners.HOST_OS == "macos":
+        return _integrate_macos(dry_run)
     if runners.HOST_OS != "linux":
-        raise NotSupportedHere(
-            "Double-click integration isn't available on macOS yet. Run apps from Terminal with "
-            "`omnilaunch run <app>`; Mac apps already open natively when double-clicked.")
+        raise NotSupportedHere(f"Double-click integration isn't available on {runners.HOST_OS}.")
     path = os.path.join(applications_dir(), DESKTOP_ID)
     steps = [f"write {path}"]
     if not dry_run:
@@ -188,6 +190,8 @@ def integrate(dry_run: bool = False) -> list[str]:
 def unintegrate() -> bool:
     if runners.HOST_OS == "windows":
         return _unintegrate_windows()
+    if runners.HOST_OS == "macos":
+        return _unintegrate_macos()
     path = os.path.join(applications_dir(), DESKTOP_ID)
     if not os.path.exists(path):
         return False
@@ -197,8 +201,212 @@ def unintegrate() -> bool:
     return True
 
 
+# ---------------------------------------------------------------- macOS: an app that opens app files
+
+MAC_APP = os.path.expanduser("~/Applications/OmniLaunch.app")
+MAC_BUNDLE_ID = "com.kpsit.omnilaunch"
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/"
+              "Support/lsregister")
+MAC_EXTENSIONS = ["exe", "msi", "apk", "AppImage"]
+MAC_TYPES = [   # declared so macOS knows these file types even if nothing else on the Mac does
+    ("com.microsoft.windows-executable", "Windows app", ["exe"], ["public.data", "public.executable"]),
+    ("com.kpsit.omnilaunch.msi", "Windows installer", ["msi"], ["public.data"]),
+    ("com.android.package-archive", "Android app", ["apk"], ["public.data", "public.archive"]),
+    ("com.kpsit.omnilaunch.appimage", "Linux app", ["AppImage", "appimage"], ["public.data", "public.executable"]),
+]
+# Finder starts apps with a minimal PATH; add the usual places Homebrew, OrbStack and XQuartz live.
+MAC_PATH = "/opt/homebrew/bin:/usr/local/bin:$HOME/.orbstack/bin:/opt/X11/bin:$PATH"
+
+# JavaScript for Automation: make OmniLaunch.app the default for each extension, then report the result.
+SET_DEFAULTS_JXA = r"""
+ObjC.import('AppKit');
+ObjC.import('UniformTypeIdentifiers');
+function run(argv) {
+  var app = $.NSURL.fileURLWithPath(argv[0]);
+  var ws = $.NSWorkspace.sharedWorkspace;
+  var setDefaults = argv[1] === "set";
+  for (var i = 2; setDefaults && i < argv.length; i++) {
+    var t = $.UTType.typeWithFilenameExtension(argv[i]);
+    if (!t || t.isNil()) continue;
+    ws.setDefaultApplicationAtURLToOpenContentTypeCompletionHandler(app, t, null);
+  }
+  if (setDefaults) delay(3);
+  var out = [];
+  for (var j = 2; j < argv.length; j++) {
+    var u = $.UTType.typeWithFilenameExtension(argv[j]);
+    var h = (u && !u.isNil()) ? ws.URLForApplicationToOpenContentType(u) : null;
+    out.push(argv[j] + "=" + ((h && !h.isNil()) ? h.path.js : "none"));
+  }
+  return out.join("\n");
+}
+"""
+
+
+def _applescript_string(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def mac_shell_command() -> str:
+    """The shell command OmniLaunch.app runs for each opened file (the file is appended, quoted)."""
+    import shlex
+    exe = shutil.which("omnilaunch")
+    if exe:
+        parts = [exe]
+    else:
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "omnilaunch")
+        parts = [sys.executable, script]
+    return 'export PATH="' + MAC_PATH + '"; ' + " ".join(shlex.quote(p) for p in parts) + " run --gui"
+
+
+def mac_applescript() -> str:
+    import shlex
+    log = os.path.join(runners.data_dir(), "omnilaunch.log")
+    cmd = _applescript_string(mac_shell_command() + " ")
+    tail = _applescript_string(" >> " + shlex.quote(log) + " 2>&1 &")
+    return "\n".join([
+        "on open theFiles",
+        "\trepeat with f in theFiles",
+        f"\t\tdo shell script {cmd} & quoted form of (POSIX path of f) & {tail}",
+        "\tend repeat",
+        "end open",
+        "",
+        "on run",
+        '\tdisplay dialog "OmniLaunch opens Windows, Linux and Android apps on your Mac. Just double-click '
+        'an .exe, .msi, .apk or .AppImage file." buttons {"OK"} default button "OK" with title "OmniLaunch"',
+        "end run",
+        "",
+    ])
+
+
+def mac_info_plist_updates(plist: dict) -> dict:
+    plist.update({
+        "CFBundleIdentifier": MAC_BUNDLE_ID,
+        "CFBundleName": "OmniLaunch",
+        "CFBundleDisplayName": "OmniLaunch",
+        "CFBundleDocumentTypes": [{
+            "CFBundleTypeName": label,
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Default",
+            "LSItemContentTypes": [uti],
+            "CFBundleTypeExtensions": exts,
+        } for uti, label, exts, _ in MAC_TYPES],
+        "UTImportedTypeDeclarations": [{
+            "UTTypeIdentifier": uti,
+            "UTTypeDescription": label,
+            "UTTypeConformsTo": conforms,
+            "UTTypeTagSpecification": {"public.filename-extension": exts},
+        } for uti, label, exts, conforms in MAC_TYPES],
+    })
+    return plist
+
+
+def mac_default_handlers(set_defaults: bool = False) -> dict:
+    """Which app opens each file type OmniLaunch handles; optionally make OmniLaunch the default first."""
+    r = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-e", SET_DEFAULTS_JXA, MAC_APP,
+                        "set" if set_defaults else "get", *MAC_EXTENSIONS], capture_output=True, text=True)
+    return dict(line.partition("=")[::2] for line in (r.stdout or "").strip().splitlines() if "=" in line)
+
+
+def _integrate_macos(dry_run: bool) -> list:
+    import plistlib
+    import tempfile
+    steps = [f"build {MAC_APP} (opens .exe, .msi, .apk and .AppImage files)",
+             "register it with macOS and make it the default app for those file types"]
+    if dry_run:
+        return steps
+    os.makedirs(os.path.dirname(MAC_APP), exist_ok=True)
+    os.makedirs(runners.data_dir(), exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", suffix=".applescript", delete=False) as f:
+        f.write(mac_applescript())
+        src = f.name
+    try:
+        if os.path.exists(MAC_APP):
+            shutil.rmtree(MAC_APP)
+        subprocess.run(["/usr/bin/osacompile", "-o", MAC_APP, src], check=True)
+    finally:
+        os.unlink(src)
+    plist_path = os.path.join(MAC_APP, "Contents", "Info.plist")
+    with open(plist_path, "rb") as f:
+        plist = plistlib.load(f)
+    with open(plist_path, "wb") as f:
+        plistlib.dump(mac_info_plist_updates(plist), f)
+    # Editing Info.plist breaks the applet's signature; re-sign it locally so macOS accepts it.
+    subprocess.run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", MAC_APP], check=False)
+    subprocess.run([LSREGISTER, "-f", MAC_APP], check=False)
+    for ext, handler in mac_default_handlers(set_defaults=True).items():
+        ok = handler.rstrip("/") == MAC_APP.rstrip("/")
+        steps.append(f".{ext}: " + ("opens with OmniLaunch" if ok else
+                                    "not set yet: approve the macOS prompt, or use Get Info > Open with > Change All"))
+    return steps
+
+
+def mac_integrated() -> bool:
+    return runners.HOST_OS == "macos" and os.path.isdir(MAC_APP)
+
+
+def _unintegrate_macos() -> bool:
+    if not os.path.isdir(MAC_APP):
+        return False
+    subprocess.run([LSREGISTER, "-u", MAC_APP], check=False)
+    shutil.rmtree(MAC_APP)
+    return True
+
+
+# ---------------------------------------------------------------- dialogs (no terminal needed)
+
+def _osascript(*lines: str, args: tuple = ()) -> subprocess.CompletedProcess:
+    argv = ["/usr/bin/osascript"]
+    for line in lines:
+        argv += ["-e", line]
+    return subprocess.run([*argv, *args], capture_output=True, text=True)
+
+
+def ask(title: str, message: str, yes: str = "Install", no: str = "Not Now") -> bool:
+    """Ask a yes/no question in a dialog. Returns False if no dialog could be shown."""
+    try:
+        if runners.HOST_OS == "macos":
+            r = _osascript("on run argv",
+                           "display dialog (item 2 of argv) with title (item 1 of argv) buttons "
+                           "{(item 4 of argv), (item 3 of argv)} default button (item 3 of argv) with icon note",
+                           "end run", args=(title, message, yes, no))
+            return r.returncode == 0 and ("button returned:" + yes) in r.stdout
+        if runners.HOST_OS == "windows":
+            import ctypes
+            return ctypes.windll.user32.MessageBoxW(None, message, title, 0x4 | 0x20) == 6   # YESNO, ? icon
+        if shutil.which("zenity"):
+            return subprocess.run(["zenity", "--question", "--title", title, "--text", message,
+                                   "--ok-label", yes, "--cancel-label", no]).returncode == 0
+        if shutil.which("kdialog"):
+            return subprocess.run(["kdialog", "--title", title, "--yesno", message,
+                                   "--yes-label", yes, "--no-label", no]).returncode == 0
+    except Exception:
+        pass
+    return False
+
+
+def alert(title: str, message: str) -> None:
+    """Show an error the user must see (they double-clicked something and nothing else will tell them)."""
+    try:
+        if runners.HOST_OS == "macos":
+            _osascript("on run argv", "display alert (item 1 of argv) message (item 2 of argv) as critical",
+                       "end run", args=(title, message))
+            return
+        if runners.HOST_OS == "windows":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)   # MB_ICONERROR
+            return
+        for tool, argv in (("zenity", ["zenity", "--error", "--title", title, "--text", message]),
+                           ("kdialog", ["kdialog", "--title", title, "--error", message])):
+            if shutil.which(tool):
+                subprocess.run(argv)
+                return
+    except Exception:
+        pass
+    notify(title, message)
+
+
 def notify(title: str, body: str) -> None:
-    """Show a desktop notification (used when launched by double-click, with no terminal)."""
+    """Show a desktop notification (progress messages when there's no terminal)."""
     try:
         _notify(title, body)
     except Exception:
@@ -207,15 +415,21 @@ def notify(title: str, body: str) -> None:
 
 def _notify(title: str, body: str) -> None:
     if runners.HOST_OS == "macos":
-        # Pass text as arguments rather than splicing it into the script, so quotes can't break it.
-        script = ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
-                  "-e", "end run"]
-        subprocess.run(["/usr/bin/osascript", *script, title, body], check=False)
+        _osascript("on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run",
+                   args=(title, body))
     elif runners.HOST_OS == "windows":
-        try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(None, body, f"OmniLaunch: {title}", 0x40)  # MB_ICONINFORMATION
-        except Exception:
-            pass
+        pass   # Windows toasts need a registered app identity; OmniLaunch uses dialogs there instead
     elif shutil.which("notify-send"):
         subprocess.run(["notify-send", "-a", "OmniLaunch", title, body], check=False)
+
+
+def run_as_admin(argv: list) -> list:
+    """Turn a command that needs admin rights into one that asks via the system's own password prompt."""
+    import shlex
+    if runners.HOST_OS == "macos":
+        return ["/usr/bin/osascript", "-e", "on run argv", "-e",
+                "do shell script (item 1 of argv) with administrator privileges", "-e", "end run",
+                " ".join(shlex.quote(a) for a in argv)]
+    if runners.HOST_OS == "linux" and shutil.which("pkexec"):
+        return ["pkexec", *argv]
+    return ["sudo", *argv]

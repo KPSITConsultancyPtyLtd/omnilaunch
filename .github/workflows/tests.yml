@@ -20,6 +20,11 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Unit tests
         run: python -m unittest discover -s tests -v
+      - name: Real-world checks (downloads, double-click registration, .dmg install)
+        if: matrix.python == '3.13'
+        run: python tests/ci_real_checks.py
+        env:
+          OMNILAUNCH_HOME: ${{ runner.temp }}/omnilaunch
       - name: Smoke test (real host)
         run: |
           python bin/omnilaunch doctor
