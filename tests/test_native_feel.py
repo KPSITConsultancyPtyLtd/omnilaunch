@@ -253,6 +253,16 @@ class ShortcutTests(TmpCase):
         with self.assertRaises(runners.UnsupportedApp):
             runners.plan(detect(exe), env_name="wine/nope")
 
+    def test_program_inside_an_environment_reuses_it(self):
+        """Opening an installed program directly must not create a second Windows environment."""
+        root = self.prefix()
+        self.with_tools("wine")
+        exe = os.path.join(root, "drive_c", "Program Files", "Foo App", "foo.exe")
+        lp = runners.plan(detect(exe))
+        self.assertEqual(lp.env["WINEPREFIX"], root)
+        self.assertEqual(runners.enclosing_env(exe), "wine/setup-1")
+        self.assertIsNone(runners.enclosing_env(_write(self.d, "other.exe", fake_pe())))
+
     def test_installer_run_adds_programs_afterwards(self):
         root = self.prefix()
         self.with_tools("wine")

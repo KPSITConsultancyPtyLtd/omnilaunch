@@ -109,13 +109,20 @@ def _fetch(url: str, dest: str | None = None, attempts: int = 3) -> bytes:
 def _fetch_once(url: str, dest: str | None = None) -> bytes:
     """Download with curl when available (it uses the system's certificates), else urllib."""
     curl = shutil.which("curl")
+    headers = ["User-Agent: omnilaunch"]
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token and url.startswith("https://api.github.com/"):
+        headers.append(f"Authorization: Bearer {token}")   # avoids GitHub's low anonymous rate limit
     if curl:
-        argv = [curl, "-fsSL", "-H", "User-Agent: omnilaunch", url]
+        argv = [curl, "-fsSL"]
+        for h in headers:
+            argv += ["-H", h]
+        argv.append(url)
         if dest:
             subprocess.run([*argv, "-o", dest], check=True)
             return b""
         return subprocess.run(argv, check=True, capture_output=True).stdout
-    req = urllib.request.Request(url, headers={"User-Agent": "omnilaunch"})
+    req = urllib.request.Request(url, headers=dict(h.split(": ", 1) for h in headers))
     with urllib.request.urlopen(req, timeout=120) as r:
         data = r.read()
     if dest:

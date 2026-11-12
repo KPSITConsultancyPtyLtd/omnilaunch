@@ -192,6 +192,20 @@ def app_id(info: AppInfo) -> str:
     return f"{base}-{digest}"
 
 
+def enclosing_env(path: str) -> str | None:
+    """If an app lives inside one of OmniLaunch's environments (a program an installer put there),
+    the name of that environment, e.g. "wine/7z2606-x64-8dc73050". Running the program there
+    keeps its settings and avoids creating a second, duplicate Windows environment."""
+    root = os.path.realpath(os.path.join(data_dir(), "prefixes"))
+    real = os.path.realpath(path)
+    if not real.startswith(root + os.sep):
+        return None
+    parts = os.path.relpath(real, root).split(os.sep)
+    if len(parts) >= 3 and parts[0] in ("wine", "proton"):
+        return parts[0] + "/" + parts[1]
+    return None
+
+
 def default_runner(info: AppInfo) -> str:
     if info.platform == Platform.ANDROID:
         return "android"
@@ -225,6 +239,8 @@ def plan(info: AppInfo, args: list[str] | None = None, runner: str | None = None
     args = list(args or [])
     if runner and runner not in RUNNERS:
         raise UnsupportedApp(f"Unknown runner '{runner}'.", f"Choose one of: {', '.join(RUNNERS)}")
+    if not env_name and info.platform == Platform.WINDOWS:
+        env_name = enclosing_env(info.path)
     if env_name:
         env_name = env_name.replace("\\", "/").strip("/")
         env_root = os.path.join(data_dir(), "prefixes", *env_name.split("/"))

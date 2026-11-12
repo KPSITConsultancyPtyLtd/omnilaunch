@@ -25,6 +25,7 @@ jobs:
         run: python tests/ci_real_checks.py
         env:
           OMNILAUNCH_HOME: ${{ runner.temp }}/omnilaunch
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Smoke test (real host)
         run: |
           python bin/omnilaunch doctor
