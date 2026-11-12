@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 
-from . import __version__
+from . import __version__, desktop, envs
 from .detect import detect
-from .runners import HOST_ARCH, UnsupportedApp, plan, which
+from .runners import HOST_ARCH, RUNNERS, UnsupportedApp, plan, which
+
+RUN_FLAGS = {"--dry-run", "--verbose", "-v", "--notify"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -16,9 +19,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--version", action="version", version=f"omnilaunch {__version__}")
     sub = p.add_subparsers(dest="cmd")
 
-    run = sub.add_parser("run", help="detect an app and run it with the right compatibility layer")
-    run.add_argument("app")
+    run = sub.add_parser("run", help="detect an app and run it with the right compatibility layer",
+                         description="Options may go before or after the app. "
+                                     "Use -- to pass options to the app itself.")
     run.add_argument("--dry-run", action="store_true", help="show what would run, don't run it")
+    run.add_argument("--runner", choices=RUNNERS, help="force a compatibility layer")
+    run.add_argument("-v", "--verbose", action="store_true", help="show compatibility-layer debug output")
+    run.add_argument("--notify", action="store_true", help="report errors as desktop notifications")
+    run.add_argument("app")
     run.add_argument("args", nargs=argparse.REMAINDER)
 
     info = sub.add_parser("info", help="show what platform an app was built for")
@@ -26,15 +34,60 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("doctor", help="check which compatibility layers are installed")
 
+    e = sub.add_parser("envs", help="manage the isolated per-app environments")
+    esub = e.add_subparsers(dest="envs_cmd")
+    esub.add_parser("list", help="list environments")
+    rm = esub.add_parser("remove", help="delete an environment (the app's settings and data inside it)")
+    rm.add_argument("name", help="name as shown by 'envs list', e.g. wine/notepad-1a2b3c4d")
+
+    integ = sub.add_parser("integrate", help="make double-clicking Windows/Mac apps open with OmniLaunch")
+    integ.add_argument("--dry-run", action="store_true")
+    integ.add_argument("--remove", action="store_true", help="undo the desktop integration")
+
+    # Split off everything after `--` ourselves: argparse swallows the separator,
+    # which would let our own flags steal arguments meant for the app.
+    argv = list(sys.argv[1:] if argv is None else argv)
+    passthrough: list[str] = []
+    if "--" in argv:
+        cut = argv.index("--")
+        argv, passthrough = argv[:cut], argv[cut + 1:]
+
     ns = p.parse_args(argv)
     if ns.cmd == "info":
         return _info(ns.app)
     if ns.cmd == "run":
-        return _run(ns.app, ns.args, ns.dry_run)
+        _absorb_trailing_flags(ns)
+        ns.args += passthrough
+        return _run(ns)
     if ns.cmd == "doctor":
         return _doctor()
+    if ns.cmd == "envs":
+        return _envs(ns, e)
+    if ns.cmd == "integrate":
+        return _integrate(ns)
     p.print_help()
     return 0
+
+
+def _absorb_trailing_flags(ns: argparse.Namespace) -> None:
+    """Let `run app --dry-run` work like `run --dry-run app`; anything after `--` goes to the app."""
+    app_args, i, args = [], 0, ns.args
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            app_args.extend(args[i + 1:])
+            break
+        if a in RUN_FLAGS:
+            setattr(ns, {"-v": "verbose"}.get(a, a.lstrip("-").replace("-", "_")), True)
+        elif a == "--runner" and i + 1 < len(args) and args[i + 1] in RUNNERS:
+            ns.runner = args[i + 1]
+            i += 1
+        elif a.startswith("--runner=") and a.split("=", 1)[1] in RUNNERS:
+            ns.runner = a.split("=", 1)[1]
+        else:
+            app_args.append(a)
+        i += 1
+    ns.args = app_args
 
 
 def _info(app: str) -> int:
@@ -47,63 +100,108 @@ def _info(app: str) -> int:
     if i.executable != i.path:
         print(f"Binary:    {i.executable}")
     print(f"Platform:  {i.platform.value}")
-    print(f"Arch:      {i.arch}")
+    arch = i.arch if not (i.arch == "universal" and i.archs) else f"universal ({', '.join(i.archs)})"
+    print(f"Arch:      {arch}")
     print(f"Format:    {i.kind}")
     try:
         print(f"Runner:    {plan(i).runner}")
     except UnsupportedApp as e:
-        print(f"Runner:    none available ({e})")
+        print(f"Runner:    none available: {e}")
+        if e.hint:
+            print(f"           {e.hint}")
     return 0
 
 
-def _run(app: str, args: list[str], dry_run: bool) -> int:
+def _fail(msg: str, hint: str, notify: bool, code: int) -> int:
+    print(f"Can't run this app: {msg}", file=sys.stderr)
+    if hint:
+        print(f"  -> {hint}", file=sys.stderr)
+    if notify:
+        desktop.notify("Can't run this app", f"{msg}\n{hint}".strip())
+    return code
+
+
+def _run(ns: argparse.Namespace) -> int:
     try:
-        info = detect(app)
-        lp = plan(info, args)
+        info = detect(ns.app)
+        lp = plan(info, ns.args, runner=ns.runner, verbose=ns.verbose)
     except FileNotFoundError:
-        print(f"error: no such file: {app}", file=sys.stderr)
-        return 2
+        return _fail(f"no such file: {ns.app}", "", ns.notify, 2)
     except UnsupportedApp as e:
-        print(f"Can't run this app: {e}", file=sys.stderr)
-        if e.hint:
-            print(f"  -> {e.hint}", file=sys.stderr)
-        return 3
+        return _fail(str(e), e.hint, ns.notify, 3)
 
     print(f"[omnilaunch] {info.platform.value} app ({info.kind}, {info.arch}) -> {lp.runner}", file=sys.stderr)
     for n in lp.notes:
         print(f"[omnilaunch] {n}", file=sys.stderr)
-    if dry_run:
+    if ns.dry_run:
+        if lp.cwd:
+            print(f"cd {lp.cwd}")
         for k, v in lp.env.items():
             print(f"{k}={v}")
         print(" ".join(lp.argv))
         return 0
 
-    for k in ("WINEPREFIX", "DPREFIX", "STEAM_COMPAT_DATA_PATH"):
-        if k in lp.env:
-            os.makedirs(lp.env[k], exist_ok=True)
+    if lp.prefix:
+        envs.record_launch(lp.prefix, info.path)
     env = {**os.environ, **lp.env}
-    os.execvpe(lp.argv[0], lp.argv, env)  # replace ourselves with the app
+    try:
+        if lp.cwd:
+            os.chdir(lp.cwd)
+        os.execvpe(lp.argv[0], lp.argv, env)  # replace ourselves with the app
+    except OSError as e:
+        return _fail(f"launch failed: {e.strerror} ({lp.argv[0]})", "", ns.notify, 4)
     return 0  # unreachable
 
 
 def _doctor() -> int:
-    print(f"Host CPU: {HOST_ARCH}\n")
-    checks = [
-        ("Linux apps", ["(native)"], True),
-        ("Windows apps (Wine)", ["wine", "wine64"], None),
-        ("Windows games (Proton)", [], bool(os.environ.get("OMNILAUNCH_PROTON"))),
-        ("macOS apps (Darling)", ["darling"], None),
-        ("x86 apps on ARM", ["box64", "FEXInterpreter", "qemu-x86_64"], None),
-    ]
-    if HOST_ARCH in ("x86_64", "x86"):
-        checks.pop()  # CPU translation only matters on ARM/RISC-V hosts
-    for label, tools, forced in checks:
-        found = forced if forced is not None else bool(which(*tools))
-        mark = "OK " if found else "-- "
-        extra = "" if found or not tools else f"  (install one of: {', '.join(tools)})"
-        if label.startswith("Windows games") and not found:
-            extra = "  (set OMNILAUNCH_PROTON=/path/to/proton)"
-        print(f"  [{mark}] {label}{extra}")
+    print(f"OmniLaunch {__version__} - host CPU: {HOST_ARCH}\n")
+    proton = os.environ.get("OMNILAUNCH_PROTON")
+    rows = [("Linux apps", True, "")]
+    rows.append(("Windows apps (Wine)", bool(which("wine", "wine64")), "install the 'wine' package"))
+    rows.append(("Windows games (Proton)", bool(proton and os.path.exists(proton)),
+                 "set OMNILAUNCH_PROTON=/path/to/proton"))
+    rows.append(("macOS apps (Darling)", bool(which("darling")), "see https://www.darlinghq.org"))
+    if HOST_ARCH not in ("x86_64", "x86"):
+        rows.append(("x86 apps on this CPU", bool(which("box64", "FEXInterpreter", "qemu-x86_64")),
+                     "install box64 or FEX-Emu"))
+    rows.append(("Double-click integration",
+                 os.path.exists(os.path.join(desktop.applications_dir(), desktop.DESKTOP_ID)),
+                 "run: omnilaunch integrate"))
+    for label, ok, fix in rows:
+        print(f"  [{'OK ' if ok else '-- '}] {label}" + ("" if ok else f"  ({fix})"))
+    return 0
+
+
+def _envs(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if ns.envs_cmd == "remove":
+        try:
+            path = envs.remove_env(ns.name)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"Removed {path}")
+        return 0
+    if ns.envs_cmd != "list":
+        parser.print_help()
+        return 0
+    items = envs.list_envs()
+    if not items:
+        print("No environments yet. They're created the first time you run a Windows or Mac app.")
+        return 0
+    for e in items:
+        used = time.strftime("%Y-%m-%d", time.localtime(e.last_used)) if e.last_used else "never"
+        print(f"{e.name:45} {envs.human(e.size):>8}  last used {used}  {e.app}")
+    return 0
+
+
+def _integrate(ns: argparse.Namespace) -> int:
+    if ns.remove:
+        print("Removed desktop integration." if desktop.unintegrate() else "Desktop integration wasn't installed.")
+        return 0
+    for step in desktop.integrate(dry_run=ns.dry_run):
+        print(("would " if ns.dry_run else "") + step)
+    if not ns.dry_run:
+        print("Done. Double-clicking .exe, .msi and Mac binaries now opens them with OmniLaunch.")
     return 0
 
 
