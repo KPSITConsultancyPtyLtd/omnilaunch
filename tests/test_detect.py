@@ -121,7 +121,7 @@ class DetectTests(TmpCase):
         _write(os.path.join(bundle, "Contents", "MacOS"), "Hello", fake_macho(0x01000007))
         i = detect(bundle)
         self.assertEqual((i.platform, i.arch), (Platform.MACOS, "x86_64"))
-        self.assertTrue(i.executable.endswith("Contents/MacOS/Hello"))
+        self.assertTrue(i.executable.endswith(os.path.join("Contents", "MacOS", "Hello")))
 
     def test_script(self):
         i = detect(_write(self.d, "run.sh", b"#!/usr/bin/env python3\nprint(1)\n"))

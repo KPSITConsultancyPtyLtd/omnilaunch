@@ -312,7 +312,7 @@ def _container(info: AppInfo, args: list[str]) -> LaunchPlan:
     folder = os.path.dirname(info.executable)
     # Windows paths (C:\\...) can't be used inside a Linux container, so mount the folder at /work there.
     guest_folder = "/work" if HOST_OS == "windows" else folder
-    guest_exe = guest_folder + "/" + os.path.basename(info.executable)
+    guest_exe = "/work/" + os.path.basename(info.executable) if HOST_OS == "windows" else info.executable
     image = os.environ.get("OMNILAUNCH_LINUX_IMAGE", DEFAULT_LINUX_IMAGE)
     argv = [engine, "run", "--rm", "-i"]
     if sys.stdin.isatty() and sys.stdout.isatty():
