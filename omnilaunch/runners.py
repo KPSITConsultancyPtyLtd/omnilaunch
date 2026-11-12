@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from .detect import AppInfo, Platform
 
-RUNNERS = ("native", "wine", "proton", "darling", "container", "wsl", "vm", "android")
+RUNNERS = ("native", "wine", "proton", "darling", "container", "wsl", "vm", "android", "box64")
 
 HOST_OS = {"darwin": "macos", "linux": "linux", "win32": "windows", "cygwin": "windows"}.get(
     sys.platform, "linux" if sys.platform.startswith("linux") else sys.platform)
@@ -210,7 +210,7 @@ def enclosing_env(path: str) -> str | None:
     if not real.startswith(root + os.sep):
         return None
     parts = os.path.relpath(real, root).split(os.sep)
-    if len(parts) >= 3 and parts[0] in ("wine", "proton"):
+    if len(parts) >= 3 and parts[0] in ("wine", "proton", "box64"):
         return parts[0] + "/" + parts[1]
     return None
 
@@ -227,6 +227,10 @@ def default_runner(info: AppInfo) -> str:
     if info.platform == Platform.WINDOWS:
         if HOST_OS == "linux" and (find_umu() or os.environ.get("OMNILAUNCH_PROTON")):
             return "proton"
+        if os.environ.get("OMNILAUNCH_WINDOWS_RUNNER") in RUNNERS:
+            return os.environ["OMNILAUNCH_WINDOWS_RUNNER"]
+        if rosetta_era_over():
+            return "box64"   # Wine on a Mac needs Rosetta, which macOS 28+ no longer offers for apps
         if find_wine():
             return "wine"
         from . import vms
@@ -284,6 +288,8 @@ def plan(info: AppInfo, args: list[str] | None = None, runner: str | None = None
         lp = _wsl(info, args)
     elif target == "vm":
         lp = _vm(info, args)
+    elif target == "box64":
+        lp = _box64(info, args, verbose, env_name)
     elif target == "android":
         if info.platform != Platform.ANDROID:
             raise UnsupportedApp("The Android runner only runs Android apps (.apk).")
@@ -633,3 +639,98 @@ def _wine_hint() -> str:
         if which(mgr):
             return f"Install it with: {cmd} wine"
     return "Install 'wine' with your system package manager."
+
+
+# ---------------------------------------------------------------- Windows apps without Rosetta (Box64)
+
+BOX64_IMAGE = "omnilaunch/wine-box64"
+ROSETTA_LIMITED_FROM = 28   # Apple: from macOS 28, Rosetta only serves certain older games
+
+
+def mac_major() -> int:
+    """macOS major version (e.g. 27), or 0 if not a Mac / unknown."""
+    if HOST_OS != "macos":
+        return 0
+    try:
+        out = subprocess.run(["/usr/bin/sw_vers", "-productVersion"], capture_output=True, text=True,
+                             timeout=10).stdout.strip()
+        return int(out.split(".")[0])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        try:
+            return int(host_platform.mac_ver()[0].split(".")[0])
+        except ValueError:
+            return 0
+
+
+def rosetta_era_over() -> bool:
+    """True on Apple Silicon Macs where Wine can no longer rely on Rosetta (macOS 28+)."""
+    return HOST_OS == "macos" and HOST_ARCH == "arm64" and mac_major() >= ROSETTA_LIMITED_FROM
+
+
+def box64_image_ready() -> bool:
+    engine = find_container_engine()
+    if not engine:
+        return False
+    try:
+        return subprocess.run([engine, "image", "inspect", BOX64_IMAGE], capture_output=True,
+                              timeout=20).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _box64(info: AppInfo, args: list, verbose: bool, env_name: str | None) -> LaunchPlan:
+    """Run an Intel Windows app on an ARM computer without Rosetta: an ARM64 Linux container
+    (the hidden VM Docker/Podman/OrbStack already run) where Box64 translates Intel code and Wine
+    provides Windows. The app's environment lives on this computer, like every other one."""
+    if info.platform not in (Platform.WINDOWS, Platform.UNKNOWN):
+        raise UnsupportedApp(f"Box64 + Wine runs Windows apps, but this is a {info.platform.value} app.")
+    if HOST_OS == "windows":
+        raise UnsupportedApp("This is Windows already: Windows apps run natively.", "Use --runner native.")
+    if "DLL" in info.kind:
+        raise UnsupportedApp(f"{os.path.basename(info.path)} is a Windows library (DLL), not an app.",
+                             "Run the .exe that uses it instead.")
+    engine = find_container_engine()
+    if not engine or not box64_image_ready():
+        raise UnsupportedApp("Running Windows apps without Rosetta needs OmniLaunch's Box64 + Wine "
+                             "environment, which isn't set up yet.", "Run: omnilaunch setup box64", needs="box64")
+    root = os.path.join(data_dir(), "prefixes", *(env_name.split("/") if env_name else ("box64", app_id(info))))
+    os.makedirs(root, exist_ok=True)
+    home = os.path.expanduser("~")
+    mounts = [home]
+    for path in (os.path.dirname(info.executable), root):
+        if not (path == home or path.startswith(home + os.sep)) and path not in mounts:
+            mounts.append(path)
+    argv = [engine, "run", "--rm", "-i", "--platform", "linux/arm64"]
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        argv.append("-t")
+    if hasattr(os, "getuid"):
+        argv += ["--user", f"{os.getuid()}:{os.getgid()}"]   # Wine insists the prefix belongs to its user
+    for m in mounts:
+        argv += ["-v", f"{m}:{m}"]
+    argv += ["-e", f"HOME={home}", "-e", f"WINEPREFIX={root}", "-e", "WINEDLLOVERRIDES=winemenubuilder.exe=d",
+             "-e", "WINEDEBUG=" + ("" if verbose else "-all"), "-e", "BOX64_LOG=" + ("1" if verbose else "0"),
+             "-w", os.path.dirname(info.executable)]
+    pre: list = []
+    if HOST_OS == "macos":
+        if not xquartz_installed():
+            raise UnsupportedApp("Windows apps need XQuartz to show their windows when running without Rosetta.",
+                                 "Run: omnilaunch setup box64", needs="box64")
+        host = "host.containers.internal" if os.path.basename(engine).startswith("podman") else "host.docker.internal"
+        xhost = "/opt/X11/bin/xhost" if os.path.exists("/opt/X11/bin/xhost") else "xhost"
+        pre = [(["/usr/bin/open", "-a", "XQuartz"], False), ([xhost, "+localhost"], False),
+               ([xhost, "+127.0.0.1"], False)]
+        argv += ["-e", f"DISPLAY={host}:0"]
+    elif os.environ.get("DISPLAY"):
+        argv += ["-e", f"DISPLAY={os.environ['DISPLAY']}", "-v", "/tmp/.X11-unix:/tmp/.X11-unix"]
+    ext = os.path.splitext(info.executable.lower())[1]
+    special = {".msi": ["msiexec", "/i"], ".bat": ["cmd", "/c"], ".cmd": ["cmd", "/c"], ".lnk": ["start", "/unix"]}
+    # Wait for every Windows process in the environment (installers often hand off to a child and exit).
+    script = 'box64 /opt/wine/bin/wine "$@"; s=$?; box64 /opt/wine/bin/wineserver -w; exit $s'
+    argv += [BOX64_IMAGE, "sh", "-c", script, "omnilaunch", *special.get(ext, []), info.executable,
+             *[host_path_for_windows(a) for a in args]]
+    notes = [f"Isolated Windows environment: {root}",
+             "Running through Box64 + Wine in a Linux VM (no Rosetta needed)."]
+    if not os.path.isdir(os.path.join(root, "drive_c")):
+        notes.append("First launch: setting up the Windows environment takes a few minutes.")
+    label = f"box64 ({ext.lstrip('.')})" if ext in special else "box64"
+    return LaunchPlan(label, argv, {}, notes, prefix=root, pre=pre)

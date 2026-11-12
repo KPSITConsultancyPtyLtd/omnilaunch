@@ -215,7 +215,7 @@ def _run(ns: argparse.Namespace) -> int:
             return _fail(f"preparing the launch failed: {what}", "", gui, 4)
     env = {**os.environ, **lp.env}
     try:
-        if lp.prefix and lp.runner.startswith(("wine", "proton")):
+        if lp.prefix and lp.runner.startswith(("wine", "proton", "box64")):
             return _run_windows_app(lp, env, gui)
         if os.name == "nt":
             # Windows has no real exec(): run the app as a child and pass its exit code through.
@@ -284,6 +284,15 @@ def _doctor() -> int:
         rows.append(("Mac apps", True, ""))
         if runners.HOST_ARCH == "arm64":
             rows.append(("Intel Mac apps (Rosetta 2)", runners.rosetta_installed(), "omnilaunch setup rosetta"))
+            rows.append(("Windows apps without Rosetta (Box64)", runners.box64_image_ready(),
+                         "omnilaunch setup box64"))
+            major = runners.mac_major()
+            if major >= runners.ROSETTA_LIMITED_FROM:
+                print(f"  Note: macOS {major} limits Rosetta, so Windows apps run through Box64 + Wine.\n")
+            elif major:
+                print(f"  Note: from macOS {runners.ROSETTA_LIMITED_FROM}, Rosetta is limited to some older games. "
+                      "OmniLaunch then switches\n  Windows apps to Box64 + Wine automatically "
+                      "(set it up early with: omnilaunch setup box64).\n")
         rows.append(("Windows apps (Wine)", bool(wine), "omnilaunch setup wine"))
         rows.append(("Linux command-line apps (container)", bool(engine),
                      "omnilaunch setup container"))
@@ -390,7 +399,7 @@ def _apps(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if ns.apps_cmd != "scan":
         parser.print_help()
         return 0
-    windows_envs = [e for e in envs.list_envs() if e.name.split("/")[0] in ("wine", "proton")]
+    windows_envs = [e for e in envs.list_envs() if e.name.split("/")[0] in ("wine", "proton", "box64")]
     if ns.env:
         windows_envs = [e for e in windows_envs if e.name == ns.env.strip("/")]
         if not windows_envs:

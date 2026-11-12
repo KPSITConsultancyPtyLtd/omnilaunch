@@ -40,11 +40,12 @@ class ProvisionTests(TmpCase):
         self.assertEqual(set(provision.components()), {"wine", "container", "proton", "darling", "android"})
         self.host("linux", "arm64")
         self.assertNotIn("proton", provision.components())      # umu-launcher is x86_64-only
+        self.assertIn("box64", provision.components())          # Intel Windows apps on ARM Linux
         self.host("windows", "x86_64")
         self.assertEqual(set(provision.components()), {"android", "wsl"})
         self.host("macos", "arm64")
         self.assertEqual(set(provision.components()),
-                         {"wine", "container", "rosetta", "xquartz", "linux-gui", "android"})
+                         {"wine", "container", "rosetta", "xquartz", "linux-gui", "android", "box64"})
         self.host("macos", "x86_64")
         self.assertNotIn("rosetta", provision.components())
 

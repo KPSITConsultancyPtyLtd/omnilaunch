@@ -32,6 +32,24 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 """
 
 UMU_RELEASES_API = "https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases?per_page=5"
+WINE_X64_RELEASES_API = "https://api.github.com/repos/Kron4ek/Wine-Builds/releases?per_page=50"
+# Box64 (Debian stable) translates Intel code on ARM; Wine's "wow64" Intel build runs 32- and 64-bit apps.
+BOX64_DOCKERFILE = """\
+FROM debian:trixie-slim
+ARG WINE_URL
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+      box64 ca-certificates curl xz-utils \\
+      libx11-6 libxext6 libxrender1 libxrandr2 libxi6 libxcursor1 libxinerama1 libxcomposite1 \\
+      libxfixes3 libxkbcommon0 libfreetype6 libfontconfig1 fonts-liberation libgl1 libegl1 \\
+      libvulkan1 libgnutls30t64 libasound2t64 libdbus-1-3 libunwind8 \\
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "$WINE_URL" -o /tmp/wine.tar.xz \\
+    && mkdir -p /opt/wine && tar -xJf /tmp/wine.tar.xz -C /opt/wine --strip-components=1 \\
+    && rm /tmp/wine.tar.xz
+ENV PATH=/opt/wine/bin:$PATH BOX64_NOBANNER=1 BOX64_LOG=0
+"""
+WINE_X64_PATTERNS = [r"^wine-\d+\.0-amd64-wow64\.tar\.xz$", r"^wine-[\d.]+-amd64-wow64\.tar\.xz$"]
+
 WINE_RELEASES_API = "https://api.github.com/repos/Gcenx/macOS_Wine_builds/releases?per_page=30"
 XQUARTZ_RELEASES_API = "https://api.github.com/repos/XQuartz/XQuartz/releases?per_page=5"
 
@@ -304,6 +322,20 @@ def _install_android(inst: Installer) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _install_box64(inst: Installer) -> None:
+    engine = runners.find_container_engine()
+    if not engine and not inst.dry_run:
+        raise SetupError("Needs a container engine first: run `omnilaunch setup container`.")
+    if inst.dry_run:
+        inst.note("find the newest Intel (amd64-wow64) Wine build (github.com/Kron4ek/Wine-Builds)")
+        url = "<wine-amd64-wow64.tar.xz>"
+    else:
+        name, url = pick_release_asset(json.loads(_fetch(WINE_X64_RELEASES_API)), WINE_X64_PATTERNS)
+        inst.log(f"using {name}")
+    inst.run([engine or "docker", "build", "--platform", "linux/arm64", "-t", runners.BOX64_IMAGE,
+              "--build-arg", f"WINE_URL={url}", "-"], input=BOX64_DOCKERFILE.encode())
+
+
 def _install_darling(inst: Installer) -> None:
     raise ManualStep("Darling has no ready-made packages for most Linux distributions. Follow "
                      "https://docs.darlinghq.org/build-instructions.html (about an hour to build).")
@@ -332,6 +364,11 @@ def components() -> dict[str, Component]:
     if host == "linux" and arch == "x86_64":
         out.append(Component("proton", "Proton via umu-launcher (best for Windows games)",
                              lambda: bool(runners.find_umu()), _install_proton, size="about 1 GB with the first game"))
+    if arch == "arm64" and host in ("macos", "linux"):
+        out.append(Component("box64", "Windows apps without Rosetta (Box64 + Wine in a Linux VM)",
+                             runners.box64_image_ready, _install_box64,
+                             requires=["container", "xquartz"] if host == "macos" else ["container"],
+                             size="about 1 GB"))
     if host == "linux":
         out.append(Component("darling", "Darling (runs Mac command-line tools)", lambda: bool(runners.which("darling")),
                              _install_darling))

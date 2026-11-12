@@ -18,7 +18,7 @@ installs it, and opens the app. Each app gets its own isolated environment.
 
 | App | On a Windows PC | On a Mac | On a Linux computer |
 |---|---|---|---|
-| Windows `.exe` / `.msi` | Native | Wine, or a Windows VM as fallback | Proton (games) or Wine, or a Windows VM |
+| Windows `.exe` / `.msi` | Native | Wine; on macOS 28+ Box64 + Wine (no Rosetta); or a Windows VM | Proton (games) or Wine, or a Windows VM |
 | Android `.apk` | Android Emulator | Android Emulator | Waydroid or Android Emulator |
 | Linux apps | WSL (graphical apps too, on Windows 11) | Container; windows show through XQuartz | Native |
 | Mac `.app` / `.dmg` / `.pkg` | Not possible | Native (`.dmg` installs into Applications) | Command-line tools only (Darling) |
@@ -70,7 +70,8 @@ omnilaunch integrate --remove              # undo double-click handling
 | Helper (`setup <name>`) | Where | What it does |
 |---|---|---|
 | `wine` | Mac, Linux | Mac: downloads the newest *Wine Stable* into `~/Applications` (Homebrew's Wine was disabled in 2026). Linux: your package manager |
-| `rosetta` | Apple Silicon Macs | Apple's Intel translator (Wine needs it) |
+| `rosetta` | Apple Silicon Macs | Apple's Intel translator (Wine needs it, up to macOS 27) |
+| `box64` | Apple Silicon Macs, ARM Linux | An ARM Linux image with Box64 (translates Intel code) and Wine, so Windows apps run without Rosetta. Used automatically from macOS 28 |
 | `proton` | x86 Linux | umu-launcher, which runs Proton in Valve's Steam runtime and downloads Proton itself |
 | `android` | all | Google's Android Emulator, platform tools and an Android 14 image (~2 GB), plus a virtual phone. No Android Studio or Java needed |
 | `wsl` | Windows | Windows Subsystem for Linux (`wsl --install`) |
@@ -98,10 +99,15 @@ copies its app into Applications and opens it, and a `.pkg` opens Apple's Instal
 | `OMNILAUNCH_PROTON` | A specific Proton build to use (path to its `proton` script) |
 | `OMNILAUNCH_GAMEID` | umu game ID, so Proton applies that game's fixes (default `0`) |
 | `OMNILAUNCH_LINUX_IMAGE` | Container image for Linux apps (default `debian:stable-slim`) |
+| `OMNILAUNCH_WINDOWS_RUNNER` | Always use this layer for Windows apps, e.g. `box64` |
 | `OMNILAUNCH_DESKTOP_SHORTCUTS` | Set to `0` to stop adding Desktop shortcuts for installed programs |
 
 ## How close to "native" is it?
 
+- **Rosetta's end:** Apple limits Rosetta from macOS 28 to some older games, so Wine can't
+  use it there. OmniLaunch then runs Windows apps through Box64 + Wine in the hidden Linux
+  VM instead, with windows shown through XQuartz. Ordinary apps work well; demanding 3D
+  games are slower than with Rosetta. Try it early with `OMNILAUNCH_WINDOWS_RUNNER=box64`.
 - **Windows apps on a Mac/Linux** depend on Wine/Proton. Most apps and most games work,
   but games with kernel anti-cheat (e.g. some online shooters) refuse to run, and Windows
   apps keep their Windows look. The first launch of each app takes a minute while its
@@ -123,7 +129,8 @@ python3 -m unittest discover -s tests -v
 Unit tests simulate Windows, Mac and Linux, so they pass anywhere. GitHub Actions also runs
 them on real Windows, macOS and Linux machines on every push, plus real-world checks:
 reading a real APK, the live Android/Wine/XQuartz/umu download indexes, registering
-double-click handling for real, and installing an app from a real `.dmg`.
+double-click handling for real, installing an app from a real `.dmg`, and running real 64-bit
+and 32-bit Windows programs through Box64 + Wine on ARM64.
 
 ## Roadmap
 
