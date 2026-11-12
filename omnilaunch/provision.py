@@ -33,18 +33,38 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 
 UMU_RELEASES_API = "https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases?per_page=5"
 WINE_X64_RELEASES_API = "https://api.github.com/repos/Kron4ek/Wine-Builds/releases?per_page=50"
-# Box64 (Debian stable) translates Intel code on ARM; Wine's "wow64" Intel build runs 32- and 64-bit apps.
-BOX64_DOCKERFILE = """\
+BOX64_RELEASES_API = "https://api.github.com/repos/ptitSeb/box64/releases?per_page=5"
+# Box64 translates Intel code on ARM; Wine's "wow64" Intel build runs 32- and 64-bit Windows apps.
+BOX64_DOCKERFILE = r"""# Stage 1: build the newest Box64 release (Debian's package lags behind and misses instructions
+# that real Windows programs use). Built on the machine's own CPU and cross-compiled to ARM64 when
+# that CPU isn't ARM, so it's fast either way.
+FROM --platform=$BUILDPLATFORM debian:trixie-slim AS box64
+ARG BOX64_TAG
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates curl cmake make python3 git \
+      $( [ "$(dpkg --print-architecture)" = arm64 ] && echo gcc g++ || echo gcc-aarch64-linux-gnu g++-aarch64-linux-gnu ) \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /src /out/lib && curl -fsSL "https://github.com/ptitSeb/box64/archive/refs/tags/${BOX64_TAG}.tar.gz" \
+      | tar -xz -C /src --strip-components=1 \
+    && CC=$( [ "$(dpkg --print-architecture)" = arm64 ] && echo gcc || echo aarch64-linux-gnu-gcc ) \
+    && cmake -S /src -B /build -DARM_DYNAREC=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=$CC \
+         -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+    && cmake --build /build -j"$(nproc)" \
+    && cp /build/box64 /out/box64 && (cp -r /src/x64lib/. /out/lib/ 2>/dev/null || true)
+
+# Stage 2: the runtime: ARM64 Debian with Box64 and Intel (WoW64) Wine.
 FROM debian:trixie-slim
 ARG WINE_URL
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
-      box64 ca-certificates curl xz-utils \\
-      libx11-6 libxext6 libxrender1 libxrandr2 libxi6 libxcursor1 libxinerama1 libxcomposite1 \\
-      libxfixes3 libxkbcommon0 libfreetype6 libfontconfig1 fonts-liberation libgl1 libegl1 \\
-      libvulkan1 libgnutls30t64 libasound2t64 libdbus-1-3 libunwind8 \\
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates curl xz-utils \
+      libx11-6 libxext6 libxrender1 libxrandr2 libxi6 libxcursor1 libxinerama1 libxcomposite1 \
+      libxfixes3 libxkbcommon0 libfreetype6 libfontconfig1 fonts-liberation libgl1 libegl1 \
+      libvulkan1 libgnutls30t64 libasound2t64 libdbus-1-3 libunwind8 \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL "$WINE_URL" -o /tmp/wine.tar.xz \\
-    && mkdir -p /opt/wine && tar -xJf /tmp/wine.tar.xz -C /opt/wine --strip-components=1 \\
+COPY --from=box64 /out/box64 /usr/local/bin/box64
+COPY --from=box64 /out/lib/ /usr/lib/box64-x86_64-linux-gnu/
+RUN curl -fsSL "$WINE_URL" -o /tmp/wine.tar.xz \
+    && mkdir -p /opt/wine && tar -xJf /tmp/wine.tar.xz -C /opt/wine --strip-components=1 \
     && rm /tmp/wine.tar.xz
 ENV PATH=/opt/wine/bin:$PATH BOX64_NOBANNER=1 BOX64_LOG=0
 """
@@ -327,13 +347,23 @@ def _install_box64(inst: Installer) -> None:
     if not engine and not inst.dry_run:
         raise SetupError("Needs a container engine first: run `omnilaunch setup container`.")
     if inst.dry_run:
-        inst.note("find the newest Intel (amd64-wow64) Wine build (github.com/Kron4ek/Wine-Builds)")
-        url = "<wine-amd64-wow64.tar.xz>"
+        inst.note("find the newest Box64 release (github.com/ptitSeb/box64) and Intel (amd64-wow64) Wine "
+                  "build (github.com/Kron4ek/Wine-Builds)")
+        url, tag = "<wine-amd64-wow64.tar.xz>", "<box64 release>"
     else:
         name, url = pick_release_asset(json.loads(_fetch(WINE_X64_RELEASES_API)), WINE_X64_PATTERNS)
-        inst.log(f"using {name}")
+        tag = newest_release_tag(json.loads(_fetch(BOX64_RELEASES_API)))
+        inst.log(f"using {name} and Box64 {tag}")
     inst.run([engine or "docker", "build", "--platform", "linux/arm64", "-t", runners.BOX64_IMAGE,
-              "--build-arg", f"WINE_URL={url}", "-"], input=BOX64_DOCKERFILE.encode())
+              "--build-arg", f"WINE_URL={url}", "--build-arg", f"BOX64_TAG={tag}", "-"],
+             input=BOX64_DOCKERFILE.encode())
+
+
+def newest_release_tag(releases: list) -> str:
+    for rel in releases:
+        if not rel.get("draft") and not rel.get("prerelease") and rel.get("tag_name"):
+            return rel["tag_name"]
+    raise SetupError("Couldn't find a Box64 release. Check your internet connection and try again.")
 
 
 def _install_darling(inst: Installer) -> None:

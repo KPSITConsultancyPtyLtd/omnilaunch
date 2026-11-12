@@ -84,13 +84,20 @@ class Box64Tests(TmpCase):
             {"name": "wine-11.14-staging-amd64-wow64.tar.xz", "browser_download_url": "u-staging"},
             {"name": "wine-11.14-amd64-wow64.tar.xz", "browser_download_url": "u-1114"},
             {"name": "wine-11.14-amd64.tar.xz", "browser_download_url": "u-plain"}]}]
-        with mock.patch.object(provision, "_fetch", return_value=__import__("json").dumps(releases).encode()), \
+        box64_releases = [{"tag_name": "v9.9.9-rc", "prerelease": True}, {"tag_name": "v9.9.8"}]
+
+        def fake_fetch(url, dest=None):
+            data = box64_releases if "ptitSeb" in url else releases
+            return __import__("json").dumps(data).encode()
+
+        with mock.patch.object(provision, "_fetch", fake_fetch), \
                 mock.patch.object(provision.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, \
                 mock.patch.object(runners, "box64_image_ready", return_value=False):
             quiet(provision.install, "box64", _seen={"container", "xquartz"})
         argv, kw = run.call_args[0][0], run.call_args[1]
         self.assertEqual(argv[1:5], ["build", "--platform", "linux/arm64", "-t"])
         self.assertIn("WINE_URL=u-1114", argv)
+        self.assertIn("BOX64_TAG=v9.9.8", argv)                 # newest stable Box64, built from source
         self.assertIn(b"box64", kw["input"])
 
     def test_doctor_warns_about_macos_28(self):
