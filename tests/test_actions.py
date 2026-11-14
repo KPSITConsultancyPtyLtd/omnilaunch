@@ -112,7 +112,7 @@ class ActionTests(Base):
     def test_tool_failure_reported(self):
         self.install_7zip()
         archive = _write(self.d, "broken.7z", b"x")
-        with mock.patch.object(actions.subprocess, "run",
+        with mock.patch.object(actions.runners, "run_collect",
                                return_value=mock.Mock(returncode=2, stdout="ERROR: broken.7z : Can not open the file "
                                                                            "as archive", stderr="")), \
                 mock.patch.object(desktop, "alert") as alert:
@@ -209,3 +209,15 @@ class WarmServerTests(TmpCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackgroundHelperTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "uses a POSIX shell")
+    def test_output_is_collected_without_waiting_for_leftover_helpers(self):
+        # Like Wine's services.exe: the tool exits, a helper it started keeps running with its output.
+        import time
+        from omnilaunch import runners
+        t = time.time()
+        r = runners.run_collect(["/bin/sh", "-c", "sleep 30 & echo Everything is Ok"])
+        self.assertLess(time.time() - t, 10)
+        self.assertIn("Everything is Ok", r.stdout)

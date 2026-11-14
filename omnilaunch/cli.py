@@ -229,7 +229,7 @@ def _run(ns: argparse.Namespace) -> int:
                     desktop.notify("OmniLaunch", step.__doc__[0].upper() + step.__doc__[1:] + "...")
                 ok = bool(step())
             else:
-                ok = subprocess.run(step, capture_output=not required).returncode == 0
+                ok = (subprocess.run(step) if required else runners.run_collect(step)).returncode == 0
         except (OSError, subprocess.SubprocessError):
             ok = False
         if required and not ok:

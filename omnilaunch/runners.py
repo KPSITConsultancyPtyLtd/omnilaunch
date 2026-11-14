@@ -675,6 +675,20 @@ def find_wineserver(wine: str) -> str | None:
     return which("wineserver")
 
 
+def run_collect(argv, **kw) -> subprocess.CompletedProcess:
+    """subprocess.run with its output collected through temporary files rather than pipes.
+    Wine leaves helper processes (services.exe, winedevice.exe) running for as long as its server does,
+    and they inherit the output pipes, so reading a pipe to the end would wait until the server quits:
+    up to WARM_SECONDS once it's kept warm. Files don't wait."""
+    import tempfile
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        r = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, **kw)
+        out.seek(0), err.seek(0)
+        r.stdout = out.read().decode("utf-8", "replace")
+        r.stderr = err.read().decode("utf-8", "replace")
+    return r
+
+
 def warm_wineserver(wine: str, prefix: str) -> bool:
     """Keep this environment's Wine server running for a while, so the next launch skips its start-up.
     Call it after a program (and anything it started) has finished: normally the server quits a few

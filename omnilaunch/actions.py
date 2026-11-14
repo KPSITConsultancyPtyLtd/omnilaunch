@@ -166,9 +166,9 @@ def run(action_id: str, files: list, gui: bool = False) -> int:
                     if callable(step):
                         step()
                     else:
-                        subprocess.run(step, capture_output=True, check=False)
+                        runners.run_collect(step, check=False)
                 argv, env, cwd = lp.argv, {**os.environ, **lp.env}, os.path.dirname(job[0])
-            r = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, errors="replace")
+            r = runners.run_collect(argv, env=env, cwd=cwd)
         except (OSError, runners.UnsupportedApp) as e:
             return fail(f"couldn't run {action.program}: {e}", 4)
         if r.returncode != 0 or not os.path.exists(output):
