@@ -49,7 +49,8 @@ class Box64Tests(TmpCase):
         self.assertIn(f"WINEPREFIX={lp.prefix}", lp.argv)
         self.assertIn(os.path.join("prefixes", "box64"), lp.prefix)
         self.assertIn("DISPLAY=host.docker.internal:0", lp.argv)
-        self.assertEqual(lp.pre[0][0], ["/usr/bin/open", "-a", "XQuartz"])
+        self.assertEqual(lp.pre[0][0], runners.ensure_xquartz_network)   # windows can reach XQuartz
+        self.assertEqual(lp.pre[1][0], ["/usr/bin/open", "-a", "XQuartz"])
 
     def test_files_on_this_computer_are_visible_inside(self):
         self.mac(28)

@@ -388,7 +388,8 @@ def components() -> dict[str, Component]:
                                  _install_rosetta))
         out.append(Component("xquartz", "XQuartz (shows Linux app windows on the Mac)",
                              runners.xquartz_installed, _install_xquartz,
-                             note="Log out and back in once so XQuartz picks up its new settings."))
+                             note="If Linux or Windows app windows don't appear the first time, log out and "
+                                  "back in once so XQuartz finishes setting itself up."))
         out.append(Component("linux-gui", "Linux graphical app support", runners.linux_gui_image_ready,
                              _install_linux_gui, requires=["container", "xquartz"], size="about 600 MB"))
     if host == "linux" and arch == "x86_64":

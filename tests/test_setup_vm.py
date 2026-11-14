@@ -162,7 +162,8 @@ class GuiTests(TmpCase):
             lp = runners.plan(detect(self.gui_app()))
         self.assertIn("DISPLAY=host.containers.internal:0", lp.argv)
         self.assertIn(runners.LINUX_GUI_IMAGE, lp.argv)
-        self.assertEqual(lp.pre[0], (["/usr/bin/open", "-a", "XQuartz"], False))
+        self.assertEqual(lp.pre[0], (runners.ensure_xquartz_network, False))
+        self.assertEqual(lp.pre[1], (["/usr/bin/open", "-a", "XQuartz"], False))
 
     def test_linux_container_gui_mounts_x11_socket(self):
         self.with_tools("docker", "xhost")

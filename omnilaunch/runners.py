@@ -162,6 +162,30 @@ def xquartz_installed() -> bool:
     return HOST_OS == "macos" and os.path.isdir(XQUARTZ_APP)
 
 
+def xquartz_allows_network() -> bool:
+    """XQuartz must accept connections from network clients for the Linux VM's windows to appear."""
+    try:
+        out = subprocess.run(["/usr/bin/defaults", "read", "org.xquartz.X11", "nolisten_tcp"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out in ("0", "false")
+
+
+def ensure_xquartz_network() -> bool:
+    """let XQuartz show windows from the Linux VM"""
+    if xquartz_allows_network():
+        return True
+    subprocess.run(["/usr/bin/defaults", "write", "org.xquartz.X11", "nolisten_tcp", "-bool", "false"],
+                   capture_output=True, check=False)
+    # The setting applies when XQuartz starts, so restart it if it's running (the next step opens it).
+    subprocess.run(["/usr/bin/osascript", "-e", 'if application "XQuartz" is running then quit application "XQuartz"'],
+                   capture_output=True, check=False)
+    import time
+    time.sleep(2)
+    return True
+
+
 def linux_gui_image_ready() -> bool:
     engine = find_container_engine()
     if not engine:
@@ -440,7 +464,7 @@ def _container_display(engine: str):
                                  "Run: omnilaunch setup linux-gui", needs="linux-gui")
         host = "host.containers.internal" if os.path.basename(engine).startswith("podman") else "host.docker.internal"
         xhost = "/opt/X11/bin/xhost" if os.path.exists("/opt/X11/bin/xhost") else "xhost"
-        pre = [(["/usr/bin/open", "-a", "XQuartz"], False),
+        pre = [(ensure_xquartz_network, False), (["/usr/bin/open", "-a", "XQuartz"], False),
                ([xhost, "+localhost"], False), ([xhost, "+127.0.0.1"], False)]
         return ["-e", f"DISPLAY={host}:0"], image, pre
     if HOST_OS == "linux":
@@ -717,8 +741,8 @@ def _box64(info: AppInfo, args: list, verbose: bool, env_name: str | None) -> La
                                  "Run: omnilaunch setup box64", needs="box64")
         host = "host.containers.internal" if os.path.basename(engine).startswith("podman") else "host.docker.internal"
         xhost = "/opt/X11/bin/xhost" if os.path.exists("/opt/X11/bin/xhost") else "xhost"
-        pre = [(["/usr/bin/open", "-a", "XQuartz"], False), ([xhost, "+localhost"], False),
-               ([xhost, "+127.0.0.1"], False)]
+        pre = [(ensure_xquartz_network, False), (["/usr/bin/open", "-a", "XQuartz"], False),
+               ([xhost, "+localhost"], False), ([xhost, "+127.0.0.1"], False)]
         argv += ["-e", f"DISPLAY={host}:0"]
     elif os.environ.get("DISPLAY"):
         argv += ["-e", f"DISPLAY={os.environ['DISPLAY']}", "-v", "/tmp/.X11-unix:/tmp/.X11-unix"]

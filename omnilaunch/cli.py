@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     info.add_argument("app")
 
     sub.add_parser("doctor", help="check which compatibility layers are installed")
+    sub.add_parser("update", help="update OmniLaunch to the newest version (git checkouts)")
 
     e = sub.add_parser("envs", help="manage the isolated per-app environments")
     esub = e.add_subparsers(dest="envs_cmd")
@@ -48,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
     ap = sub.add_parser("apps", help="Windows programs installed through OmniLaunch, as apps on this computer")
     asub = ap.add_subparsers(dest="apps_cmd")
     asub.add_parser("list", help="list the launchers OmniLaunch has created")
+    arm = asub.add_parser("remove", help="remove an installed app: its launcher, Desktop shortcut and "
+                                         "(with --with-data) its Windows environment")
+    arm.add_argument("name", help="the app's name as shown by `apps list`, e.g. \"7-Zip File Manager\"")
+    arm.add_argument("--with-data", action="store_true",
+                     help="also delete the app's Windows environment (its settings and files)")
     asc = asub.add_parser("scan", help="create launchers (and Desktop shortcuts) for installed programs")
     asc.add_argument("env", nargs="?", help="one environment (see `envs list`); default: all of them")
     asc.add_argument("--no-desktop", action="store_true", help="don't put shortcuts on the Desktop")
@@ -89,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run(ns)
     if ns.cmd == "doctor":
         return _doctor()
+    if ns.cmd == "update":
+        return _update()
     if ns.cmd == "envs":
         return _envs(ns, e)
     if ns.cmd == "integrate":
@@ -213,6 +221,9 @@ def _run(ns: argparse.Namespace) -> int:
         if required and not ok:
             what = step.__doc__ if callable(step) else " ".join(step)
             return _fail(f"preparing the launch failed: {what}", "", gui, 4)
+    if gui and any(n.startswith("First launch") for n in lp.notes):
+        desktop.notify("OmniLaunch", f"Setting up a Windows environment for {os.path.basename(info.path)}. "
+                                     "This takes a minute or two the first time only.")
     env = {**os.environ, **lp.env}
     try:
         if lp.prefix and lp.runner.startswith(("wine", "proton", "box64")):
@@ -332,6 +343,9 @@ def _doctor() -> int:
     if engine:
         print(f"  Container engine: {engine}")
     print(f"  Environments stored in: {runners.data_dir()}")
+    log = os.path.join(runners.data_dir(), "omnilaunch.log")
+    if os.path.exists(log):
+        print(f"  Log of double-clicked apps: {log}")
     return 0
 
 
@@ -387,6 +401,30 @@ def _setup(ns: argparse.Namespace) -> int:
     return code
 
 
+def _update() -> int:
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        print("This copy wasn't installed from git. Update it with:\n"
+              "  pip install --upgrade git+https://github.com/KPSITConsultancyPtyLtd/omnilaunch")
+        return 1
+    before = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["git", "-C", repo, "pull", "--ff-only"], capture_output=True, text=True)
+    if r.returncode != 0:
+        print("Update failed:\n" + (r.stderr or r.stdout).strip(), file=sys.stderr)
+        print("If you changed files in the OmniLaunch folder, undo or commit those changes and try again.",
+              file=sys.stderr)
+        return 1
+    after = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    if before == after:
+        print(f"OmniLaunch is up to date ({after}).")
+        return 0
+    log = subprocess.run(["git", "-C", repo, "log", "--format=  - %s", f"{before}..{after}"],
+                         capture_output=True, text=True).stdout
+    print(f"Updated OmniLaunch {before} -> {after}:\n{log.rstrip()}")
+    print("Double-click handling and installed apps pick up the new version automatically.")
+    return 0
+
+
 def _apps(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from . import shortcuts
     if ns.apps_cmd == "list":
@@ -394,7 +432,27 @@ def _apps(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         if not items:
             print("No apps yet. Programs you install with OmniLaunch appear here.")
         for path in items:
-            print(path)
+            env = shortcuts.launcher_env(path)
+            print(f"{shortcuts.launcher_name(path):32} {env or '?':32} {path}")
+        return 0
+    if ns.apps_cmd == "remove":
+        matches = [p for p in shortcuts.list_launchers()
+                   if shortcuts.launcher_name(p).lower() == ns.name.strip().lower()]
+        if not matches:
+            print(f"error: no app called '{ns.name}'. See: omnilaunch apps list", file=sys.stderr)
+            return 2
+        for path in matches:
+            env = shortcuts.launcher_env(path)
+            shortcuts.remove_launcher(path)
+            print(f"Removed {ns.name} (launcher and Desktop shortcut).")
+            if ns.with_data and env:
+                try:
+                    envs.remove_env(env)
+                    print(f"Removed its Windows environment {env}, and any other apps installed in it.")
+                except ValueError as e:
+                    print(f"note: {e}", file=sys.stderr)
+            elif env:
+                print(f"Its Windows environment {env} was kept; add --with-data to delete it too.")
         return 0
     if ns.apps_cmd != "scan":
         parser.print_help()

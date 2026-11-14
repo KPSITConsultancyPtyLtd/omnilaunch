@@ -62,6 +62,9 @@ def remove_env(name: str) -> str:
     if os.path.dirname(os.path.dirname(path)) != root or not os.path.isdir(path):
         raise ValueError(f"No environment named '{name}'. See: omnilaunch envs list")
     shutil.rmtree(path)
+    # Apps installed in it can't run any more: take their launchers and Desktop shortcuts away too.
+    from . import shortcuts
+    shortcuts.remove_launchers_for_env(name.replace("\\", "/").strip("/"))
     return path
 
 

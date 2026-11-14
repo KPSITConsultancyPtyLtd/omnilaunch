@@ -89,11 +89,29 @@ def mac_double_click_opens_omnilaunch():
                          (open(log).read()[-500:] if os.path.exists(log) else "(no log)"))
 
 
+PUTTY = os.path.join(tempfile.mkdtemp(), "putty.exe")
+
+
+def real_exe_icon():
+    from omnilaunch import icons
+    provision._fetch("https://the.earth.li/~sgtatham/putty/latest/w64/putty.exe", PUTTY)
+    ico = icons.extract_ico(PUTTY)
+    assert ico and ico[:4] == b"\0\0\1\0", "no icon found in putty.exe"
+    count = int.from_bytes(ico[4:6], "little")
+    return f"{count} icon sizes, {len(ico)} bytes"
+
+
 def mac_installed_program_launcher():
-    """A program installed in a Windows environment gets a real app in /Applications and on the Desktop."""
+    """A program installed in a Windows environment gets a real app in /Applications and on the Desktop,
+    with the program's own icon."""
     from omnilaunch import shortcuts
     os.makedirs(os.path.expanduser("~/Desktop"), exist_ok=True)
-    app = shortcuts.create_launcher("OmniLaunch CI Test", "wine/ci-test", "/tmp/ci/foo.exe")
+    app = shortcuts.create_launcher("OmniLaunch CI Test", "wine/ci-test", PUTTY)
+    plain = os.path.join(tempfile.mkdtemp(), "Plain.app")
+    subprocess.run(["/usr/bin/osacompile", "-o", plain, "-e", "on run\nend run"], check=True)
+    icon = open(os.path.join(app, "Contents", "Resources", "applet.icns"), "rb").read()
+    default = open(os.path.join(plain, "Contents", "Resources", "applet.icns"), "rb").read()
+    assert icon[:4] == b"icns" and icon != default, "launcher still has the default script icon"
     assert app.startswith(shortcuts.launcher_dir()) and os.path.isdir(app), app
     subprocess.run(["/usr/bin/plutil", "-lint", os.path.join(app, "Contents", "Info.plist")], check=True)
     with open(os.path.join(app, "Contents", "Info.plist"), "rb") as f:
@@ -144,6 +162,7 @@ def linux_double_click():
 
 
 check("reads a real APK (F-Droid)", real_apk)
+check("reads the icon out of a real Windows program (PuTTY)", real_exe_icon)
 check("finds Android Emulator + system image in Google's live index", android_index)
 if runners.HOST_OS == "macos":
     check("finds Wine Stable for macOS", lambda: github_asset(

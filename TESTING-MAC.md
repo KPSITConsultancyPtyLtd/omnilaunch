@@ -1,95 +1,96 @@
 # Testing OmniLaunch on a Mac
 
-The goal: **double-click a Windows `.exe` and it runs.** Steps 1–3 take about 10 minutes;
-step 4 downloads Wine (about 400 MB). When something doesn't match "Expect", copy what you see.
+Steps 1–5 take about 20 minutes, most of it waiting for Wine to download the first time.
+When something doesn't match "Expect", copy what you see, plus the log (step 7).
 
-## 1. Get OmniLaunch and turn on double-click
+## 1. Update OmniLaunch
 
-In **Terminal**:
+Already have it from earlier testing:
 
 ```bash
-xcode-select --install        # only if git/python3 aren't installed yet (a dialog appears)
-cd ~
-git clone https://github.com/KPSITConsultancyPtyLtd/omnilaunch
-cd omnilaunch
-./bin/omnilaunch integrate
+cd ~/omnilaunch
+git pull          # one last time by hand; after this, ./bin/omnilaunch update does it
+./bin/omnilaunch update
 ```
 
-Expect: lines ending `.exe: opens with OmniLaunch`, and the same for `.msi`, `.apk` and
-`.AppImage`. Recent macOS versions show a prompt for each file type asking whether to use
-OmniLaunch: choose **Use "OmniLaunch"**. If a line says "not set yet", do it once by hand:
-right-click any `.exe` > Get Info > Open with > OmniLaunch > **Change All**.
+Expect: `OmniLaunch is up to date (…)`.
 
-## 2. Health check
+First time? `xcode-select --install`, then
+`git clone https://github.com/KPSITConsultancyPtyLtd/omnilaunch ~/omnilaunch`.
+
+## 2. Turn on double-click and check health
 
 ```bash
+./bin/omnilaunch integrate
 ./bin/omnilaunch doctor
 ```
 
-Expect `[OK ] Mac apps` and `[OK ] Double-click .exe/.msi/.apk/.AppImage`. The others show
-`--` until they're needed. You don't have to install them yourself.
+Expect from `integrate`: `.exe: opens with OmniLaunch` (and `.msi`, `.apk`, `.AppImage`).
+If macOS asks whether to use OmniLaunch for a file type, choose **Use "OmniLaunch"**.
 
-## 3. A Mac `.dmg` (works with nothing extra)
+Expect from `doctor`: `[OK ] Double-click .exe/.msi/.apk/.AppImage`, and a note about macOS 28
+and Box64 (on Apple Silicon).
 
-`.dmg` files still open with Finder as usual when double-clicked. To have OmniLaunch install
-one for you, download any app's `.dmg` (for example VLC from videolan.org) and run:
+## 3. Double-click a Windows program
+
+1. Download **PuTTY** (`putty.exe`, 64-bit x86) from
+   https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html.
+2. Double-click it in Finder.
+3. If Wine isn't installed yet: a dialog offers to install it. Click **Install**, and enter your
+   Mac password if asked (that's Rosetta 2). Wait for the "is ready" notification.
+4. Expect a notification: *Setting up a Windows environment for putty.exe…*, then PuTTY's
+   window within a minute or two. Later double-clicks open it straight away.
+
+## 4. Install a Windows program like a Mac app
+
+1. Download the **7-Zip** installer (64-bit x64 `.exe`) from https://www.7-zip.org and
+   double-click it. Finish the installer.
+2. Expect: **7-Zip File Manager** appears on your **Desktop** and in
+   **Applications › OmniLaunch Apps** (also in Launchpad and Spotlight), **with 7-Zip's own
+   icon**, not a script icon.
+3. Double-click it: 7-Zip opens.
+4. Right-click any `.zip` › **Open With** › **7-Zip File Manager**: 7-Zip opens that zip.
+
+Installed 7-Zip during earlier testing? Run `./bin/omnilaunch apps scan` once: it recreates
+the app with its icon and Desktop shortcut.
+
+## 5. Remove a program cleanly
 
 ```bash
-./bin/omnilaunch run ~/Downloads/vlc-*.dmg
+./bin/omnilaunch apps list
+./bin/omnilaunch apps remove "7-Zip File Manager"
 ```
 
-Expect: VLC is copied into Applications and opens.
+Expect: the app disappears from the Desktop and from OmniLaunch Apps, and you're told its
+Windows environment was kept. `apps remove "…" --with-data` also deletes that environment.
+(Reinstall with step 4 if you want to keep using 7-Zip.)
 
-## 4. The main test: double-click a Windows `.exe`
+Also from earlier testing: if `./bin/omnilaunch envs list` still shows `wine/7zFM-…`, remove
+that leftover duplicate with `./bin/omnilaunch envs remove wine/7zFM-…` (use the full name shown).
 
-1. Download a Windows program, for example **PuTTY** (64-bit `putty.exe` from
-   https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html) or the **7-Zip** installer
-   from https://www.7-zip.org.
-2. **Double-click it in Finder.**
-3. Expect a dialog saying OmniLaunch needs Wine (about 400 MB) and asking whether to install
-   it now. Click **Install**. On Apple Silicon you'll be asked for your Mac password once
-   (that's Rosetta 2, which Wine needs).
-4. Wait a few minutes (a notification says when Wine is ready). The first launch then sets
-   up the app's Windows environment, which takes another minute.
-5. Expect: the program opens in its own window.
+## 6. Optional: Windows apps without Rosetta (what macOS 28 will use)
 
-Double-click it again later: it opens straight away.
-
-**If you used an installer (like 7-Zip):** finish the installer. The installed program then
-appears on your **Desktop** and in **Applications > OmniLaunch Apps** (also in Launchpad and
-Spotlight), and opens like a Mac app. Installed something before this feature existed? Run
-`./bin/omnilaunch apps scan` once.
-
-If anything goes wrong, OmniLaunch shows an alert. Its log is at
-`~/Library/Application Support/OmniLaunch/omnilaunch.log`, which is useful to send me.
-
-## 5. Optional: an Android app
+Needs Homebrew (for Podman) or OrbStack, and about 30 minutes the first time.
 
 ```bash
-./bin/omnilaunch setup android     # about 2 GB, takes a while
+./bin/omnilaunch setup box64
+OMNILAUNCH_WINDOWS_RUNNER=box64 ./bin/omnilaunch run ~/Downloads/putty.exe
 ```
 
-Then download an `.apk` (for example F-Droid from https://f-droid.org/F-Droid.apk) and
-double-click it. Expect: an Android phone window starts (about a minute the first time), then
-the app installs and opens in it.
+Expect: `setup box64` installs what's missing and builds an image (10–15 minutes). Then
+PuTTY's window opens through XQuartz. OmniLaunch now switches on XQuartz's "allow network
+clients" setting itself and restarts XQuartz if needed; if no window appears the very first
+time, log out and back in once and try again.
 
-## 6. Optional extras
+## 7. If something goes wrong
 
-- **Linux apps:** `./bin/omnilaunch setup container` (needs Homebrew, or install OrbStack),
-  then `./bin/omnilaunch run <linux program>`.
-- **Linux apps with windows:** `./bin/omnilaunch setup linux-gui` (installs XQuartz; log out
-  and back in once afterwards).
-- **Windows VM fallback** (only if you have Parallels Desktop):
-  `./bin/omnilaunch vm set windows --tool parallels --name "Windows 11"`, then
-  `./bin/omnilaunch run --runner vm ~/Downloads/putty.exe`.
-
-## Undo
+The log of double-clicked apps:
 
 ```bash
-./bin/omnilaunch integrate --remove
+tail -60 ~/Library/Application\ Support/OmniLaunch/omnilaunch.log | grep -v "VK_\|mvk-info\|^\s"
 ```
 
 ## What to send back
 
 - The output of `./bin/omnilaunch doctor`
-- Which steps matched "Expect" and which didn't, plus the log file if something failed
+- Which steps matched "Expect" and which didn't, plus the log lines for anything that failed

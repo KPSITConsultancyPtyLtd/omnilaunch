@@ -57,6 +57,8 @@ omnilaunch setup                           # list helpers; `setup <name>` or `se
 omnilaunch envs list                       # per-app environments (size, last used)
 omnilaunch apps scan                       # make apps (+ Desktop shortcuts) for installed programs
 omnilaunch apps list                       # the apps OmniLaunch has made
+omnilaunch apps remove "7-Zip File Manager"   # remove an app (add --with-data to delete its files)
+omnilaunch update                          # get the newest OmniLaunch (git checkouts)
 omnilaunch run  --env wine/setup-1a2b ./x.exe   # run inside an existing environment
 omnilaunch run  --runner vm ./app.exe      # force a layer: native, wine, proton, darling,
                                            #   container, wsl, vm, android
@@ -86,7 +88,7 @@ password prompt when admin rights are needed, and shows errors as alerts.
 
 When a Windows installer finishes, OmniLaunch reads the Start Menu shortcuts it created and
 adds each program to *Applications › OmniLaunch Apps* (Mac; also in Launchpad and Spotlight)
-or your app menu (Linux), plus a shortcut on your Desktop. Opening one runs it in the
+or your app menu (Linux), plus a shortcut on your Desktop, each with the program's own icon. Opening one runs it in the
 environment it was installed into. For programs installed before this existed, run
 `omnilaunch apps scan`. On a Mac, opening a `.dmg`
 copies its app into Applications and opens it, and a `.pkg` opens Apple's Installer.
@@ -138,8 +140,9 @@ and 32-bit Windows programs through Box64 + Wine on ARM64.
 2. ~~Runs on macOS and Windows as well as Linux~~ (v0.3–0.4)
 3. ~~Automatic setup of helpers; Linux GUI apps on Mac; Windows VM fallback~~ (v0.5)
 4. ~~Android apps, Proton for games, double-click on Mac, installers become native apps~~ (v0.6)
-5. App icons for installed programs; a small graphical library of everything installed
-6. Package as a signed Mac app, a Windows installer and a Linux package (no Python needed)
+5. ~~App icons for installed programs; clean removal; `update`~~ (v0.7.1)
+6. A small graphical library of everything installed
+7. Package as a signed Mac app, a Windows installer and a Linux package (no Python needed)
 
 ## Licence
 

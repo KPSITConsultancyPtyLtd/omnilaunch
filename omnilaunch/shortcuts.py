@@ -215,13 +215,21 @@ def create_launcher(name: str, env_name: str, target: str, args: str = "", deskt
             import shutil
             shutil.rmtree(app)
         subprocess.run(["/usr/bin/osacompile", "-o", app, "-e", script], check=True, capture_output=True)
-        _make_open_with_target(app, name)
+        from . import icons
+        ico = icons.extract_ico(target)
+        if ico:
+            icons.mac_set_app_icon(app, ico)      # before signing: the icon is part of the signed app
+        _make_open_with_target(app, name, env_name)
         path = app
     else:
+        from . import icons
         from .desktop import _exec_quote
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "app"
         path = os.path.join(launcher_dir(), f"omnilaunch-{slug}.desktop")
         os.makedirs(launcher_dir(), exist_ok=True)
+        ico = icons.extract_ico(target)
+        icon = (icons.save_icon_file(ico, os.path.join(os.path.dirname(launcher_dir()), "icons", "omnilaunch"),
+                                     slug) if ico else None) or "application-x-ms-dos-executable"
         with open(path, "w") as f:
             f.write("\n".join([
                 "[Desktop Entry]", "Type=Application", f"Name={name}",
@@ -229,14 +237,14 @@ def create_launcher(name: str, env_name: str, target: str, args: str = "", deskt
                 "Exec=" + " ".join(_exec_quote(a) for a in argv + extra) + " %F",
                 "MimeType=application/octet-stream;application/zip;application/x-7z-compressed;"
                 "application/x-rar;text/plain;",
-                "Icon=application-x-ms-dos-executable", "Terminal=false", "Categories=Wine;", "",
+                f"Icon={icon}", "Terminal=false", "Categories=Wine;", f"X-OmniLaunch-Env={env_name}", "",
             ]))
     if desktop and desktop_shortcuts_enabled():
         _put_on_desktop(path, name)
     return path
 
 
-def _make_open_with_target(app: str, name: str) -> None:
+def _make_open_with_target(app: str, name: str, env_name: str = "") -> None:
     """Let Finder offer this app under Open With for any file, like a native app (macOS)."""
     import plistlib
     plist_path = os.path.join(app, "Contents", "Info.plist")
@@ -250,6 +258,7 @@ def _make_open_with_target(app: str, name: str) -> None:
         "CFBundleIdentifier": f"com.kpsit.omnilaunch.app.{slug}",
         "CFBundleName": name,
         "CFBundleDisplayName": name,
+        "OmniLaunchEnv": env_name,          # lets `envs remove` find and remove this launcher
         "CFBundleDocumentTypes": [{
             "CFBundleTypeName": "Any file",
             "CFBundleTypeRole": "Editor",
@@ -313,3 +322,67 @@ def list_launchers() -> list:
         return sorted(os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".app"))
     return sorted(os.path.join(folder, n) for n in os.listdir(folder)
                   if n.startswith("omnilaunch-") and n.endswith(".desktop"))
+
+
+def launcher_env(path: str) -> str:
+    """Which environment a launcher runs its program in ('' if unknown)."""
+    try:
+        if path.endswith(".app"):
+            import plistlib
+            with open(os.path.join(path, "Contents", "Info.plist"), "rb") as f:
+                return plistlib.load(f).get("OmniLaunchEnv", "")
+        with open(path) as f:
+            for line in f:
+                if line.startswith("X-OmniLaunch-Env="):
+                    return line.split("=", 1)[1].strip()
+                if line.startswith("Exec=") and " --env " in line:
+                    return line.split(" --env ", 1)[1].split()[0].strip('"')
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
+def remove_launcher(path: str) -> None:
+    """Remove a launcher, its Desktop shortcut and its saved icon."""
+    import shutil
+    name = os.path.basename(path)
+    desk = desktop_dir()
+    if desk:
+        shortcut = os.path.join(desk, name)
+        if os.path.islink(shortcut) or (os.path.isfile(shortcut) and name.startswith("omnilaunch-")):
+            os.unlink(shortcut)
+    if os.path.isdir(path):
+        from .desktop import LSREGISTER
+        if runners.HOST_OS == "macos":
+            subprocess.run([LSREGISTER, "-u", path], capture_output=True, check=False)
+        shutil.rmtree(path)
+    elif os.path.exists(path):
+        os.unlink(path)
+        slug = name[len("omnilaunch-"):-len(".desktop")] if name.startswith("omnilaunch-") else ""
+        for ext in (".png", ".ico"):
+            icon = os.path.join(os.path.dirname(launcher_dir()), "icons", "omnilaunch", slug + ext)
+            if slug and os.path.exists(icon):
+                os.unlink(icon)
+
+
+def remove_launchers_for_env(env_name: str) -> list:
+    """Remove every launcher that runs in this environment. Returns their names."""
+    removed = []
+    for path in list_launchers():
+        if launcher_env(path) == env_name:
+            remove_launcher(path)
+            removed.append(os.path.splitext(os.path.basename(path))[0].replace("omnilaunch-", ""))
+    return removed
+
+
+def launcher_name(path: str) -> str:
+    """The app's name as the user sees it."""
+    if path.endswith(".desktop"):
+        try:
+            with open(path) as f:
+                for line in f:
+                    if line.startswith("Name="):
+                        return line[5:].strip()
+        except OSError:
+            pass
+    return os.path.splitext(os.path.basename(path))[0]
