@@ -1,0 +1,37 @@
+name: box64
+
+# Slow (about 15 minutes): runs only when the Box64 path changes, or when started by hand
+# from the Actions tab (Run workflow).
+on:
+  push:
+    paths:
+      - "omnilaunch/runners.py"
+      - "omnilaunch/provision.py"
+      - "tests/ci_box64.py"
+      - ".github/workflows/box64.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: box64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  box64:
+    name: Box64 + Wine on ARM64 runs real Windows programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Windows cross-compilers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-mingw-w64-x86-64 gcc-mingw-w64-i686
+      - name: Build image and run Windows programs
+        run: python tests/ci_box64.py
+        env:
+          OMNILAUNCH_HOME: ${{ runner.temp }}/omnilaunch
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
