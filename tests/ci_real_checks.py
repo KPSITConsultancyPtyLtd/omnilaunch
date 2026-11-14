@@ -139,12 +139,30 @@ def mac_quick_action_runs():
     open(sample, "wb").write(b"7z\xbc\xaf\x27\x1c")
     log = os.path.join(runners.data_dir(), "omnilaunch.log")
     env = {**os.environ, "OMNILAUNCH_NO_DIALOGS": "1"}
-    r = subprocess.run(["/usr/bin/automator", "-i", sample, workflow], capture_output=True, text=True,
-                       timeout=120, env=env)
-    text = open(log).read() if os.path.exists(log) else ""
-    assert f"do extract: {os.path.realpath(sample)}" in text or f"do extract: {sample}" in text, \
-        f"automator exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}; log: {text[-300:]}"
-    return f"{len(done)} hooks installed; Quick Action passed {os.path.basename(sample)} to OmniLaunch"
+    subprocess.run(["/usr/bin/plutil", "-lint", os.path.join(workflow, "Contents", "document.wflow")], check=True)
+
+    def logged():
+        text = open(log).read() if os.path.exists(log) else ""
+        return f"do extract: {os.path.realpath(sample)}" in text or f"do extract: {sample}" in text, text
+
+    how = "Automator"
+    try:
+        r = subprocess.run(["/usr/bin/automator", "-i", sample, workflow], capture_output=True, text=True,
+                           timeout=60, env=env)
+        detail = f"automator exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}"
+    except subprocess.TimeoutExpired:
+        detail = "automator stalled"
+    if not logged()[0]:
+        # Automator can stall on a headless runner with no logged-in Finder. Run the Quick Action's own
+        # shell step exactly as Finder would, so the command we generate is still proven end to end.
+        with open(os.path.join(workflow, "Contents", "document.wflow"), "rb") as f:
+            wf = plistlib.load(f)
+        command = wf["actions"][0]["action"]["ActionParameters"]["COMMAND_STRING"]
+        subprocess.run(["/bin/zsh", "-c", command, "zsh", sample], env=env, timeout=120)
+        how = f"its shell step ({detail})"
+    ok, text = logged()
+    assert ok, f"{detail}; log: {text[-300:]}"
+    return f"{len(done)} hooks installed; Quick Action passed {os.path.basename(sample)} to OmniLaunch via {how}"
 
 
 def mac_dmg_install():

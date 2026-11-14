@@ -173,7 +173,8 @@ class MenuTests(Base):
         self.assertEqual(len(os.listdir(scripts)), 3)
         script = os.path.join(scripts, "Extract Here with 7-Zip")
         self.assertTrue(os.access(script, os.X_OK) or os.name == "nt")
-        self.assertIn('do --gui extract "$@"', open(script).read())
+        with open(script) as f:
+            self.assertIn('do --gui extract "$@"', f.read())
         kde = open(os.path.join(os.environ["XDG_DATA_HOME"], "kio", "servicemenus", "omnilaunch-actions.desktop")).read()
         self.assertIn("Actions=extract;compress-7z;compress-zip;", kde)
         extract = open(os.path.join(os.environ["XDG_DATA_HOME"], "applications", "omnilaunch-extract.desktop")).read()
