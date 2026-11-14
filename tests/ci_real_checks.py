@@ -123,6 +123,30 @@ def mac_installed_program_launcher():
     return f"{app} (+ Desktop shortcut)"
 
 
+def mac_quick_action_runs():
+    """Finder's Quick Action, run through Apple's own Automator, hands the file to `omnilaunch do`."""
+    from omnilaunch import contextmenu, envs
+    env_root = os.path.join(runners.data_dir(), "prefixes", "wine", "ci-7zip")
+    tool_dir = os.path.join(env_root, "drive_c", "Program Files", "7-Zip")
+    os.makedirs(tool_dir, exist_ok=True)
+    with open(os.path.join(tool_dir, "7z.exe"), "wb") as f:
+        f.write(open(PUTTY, "rb").read())          # stands in for 7-Zip: only the plumbing is tested here
+    envs.record_launch(env_root, "/ci/7z-x64.exe")
+    done = contextmenu.install()
+    workflow = os.path.join(contextmenu.SERVICES_DIR, "Extract Here with 7-Zip.workflow")
+    assert os.path.isdir(workflow), f"Quick Action missing; installed: {done}"
+    sample = os.path.join(tempfile.mkdtemp(), "photos.7z")
+    open(sample, "wb").write(b"7z\xbc\xaf\x27\x1c")
+    log = os.path.join(runners.data_dir(), "omnilaunch.log")
+    env = {**os.environ, "OMNILAUNCH_NO_DIALOGS": "1"}
+    r = subprocess.run(["/usr/bin/automator", "-i", sample, workflow], capture_output=True, text=True,
+                       timeout=120, env=env)
+    text = open(log).read() if os.path.exists(log) else ""
+    assert f"do extract: {os.path.realpath(sample)}" in text or f"do extract: {sample}" in text, \
+        f"automator exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}; log: {text[-300:]}"
+    return f"{len(done)} hooks installed; Quick Action passed {os.path.basename(sample)} to OmniLaunch"
+
+
 def mac_dmg_install():
     work = tempfile.mkdtemp()
     app = os.path.join(work, "src", "OmniTest.app")
@@ -171,6 +195,7 @@ if runners.HOST_OS == "macos":
     check("double-click: builds and registers OmniLaunch.app", mac_double_click)
     check("double-click: opening a .exe launches OmniLaunch", mac_double_click_opens_omnilaunch)
     check("installed programs get an app in Applications and on the Desktop", mac_installed_program_launcher)
+    check("Finder Quick Action hands files to OmniLaunch (via Automator)", mac_quick_action_runs)
     check("installs an app from a .dmg", mac_dmg_install)
 if runners.HOST_OS == "linux":
     check("finds umu-launcher (Proton) download", lambda: github_asset(

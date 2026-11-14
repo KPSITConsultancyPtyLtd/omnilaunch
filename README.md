@@ -93,6 +93,26 @@ environment it was installed into. For programs installed before this existed, r
 `omnilaunch apps scan`. On a Mac, opening a `.dmg`
 copies its app into Applications and opens it, and a `.pkg` opens Apple's Installer.
 
+### Right-click actions: a program's jobs without its window
+
+Installed Windows programs can do their jobs straight from your file manager. Once 7-Zip is
+installed through OmniLaunch:
+
+- **Mac:** right-click files in Finder › *Quick Actions* › **Extract Here with 7-Zip**,
+  **Compress to .7z with 7-Zip** or **Compress to .zip with 7-Zip**. Double-clicking a `.7z`,
+  `.rar` (and other archive types macOS can't open) extracts it next to the archive, like
+  Archive Utility does for `.zip`.
+- **Linux:** the same actions under right-click › *Scripts* (Files) or › *OmniLaunch*
+  (Dolphin); double-clicking those archive types extracts them.
+- **Command line:** `omnilaunch do extract a.7z`, `omnilaunch do compress-7z report.docx`,
+  `omnilaunch do --list`.
+
+They run 7-Zip's own command-line tool (part of every 7-Zip install) in 7-Zip's environment, so
+no window opens; a notification says when it's done. OmniLaunch sets the menus up by itself when
+it sees 7-Zip installed; `omnilaunch actions` sets them up again and `omnilaunch actions remove`
+takes them away. Each Wine environment stays ready for 15 minutes after its last use, so the
+next action or launch starts faster.
+
 ### Settings (environment variables)
 
 | Variable | Effect |
@@ -102,6 +122,7 @@ copies its app into Applications and opens it, and a `.pkg` opens Apple's Instal
 | `OMNILAUNCH_GAMEID` | umu game ID, so Proton applies that game's fixes (default `0`) |
 | `OMNILAUNCH_LINUX_IMAGE` | Container image for Linux apps (default `debian:stable-slim`) |
 | `OMNILAUNCH_WINDOWS_RUNNER` | Always use this layer for Windows apps, e.g. `box64` |
+| `OMNILAUNCH_NO_DIALOGS` | Set to `1` for unattended runs: print instead of showing dialogs |
 | `OMNILAUNCH_DESKTOP_SHORTCUTS` | Set to `0` to stop adding Desktop shortcuts for installed programs |
 
 ## How close to "native" is it?
@@ -141,8 +162,9 @@ and 32-bit Windows programs through Box64 + Wine on ARM64.
 3. ~~Automatic setup of helpers; Linux GUI apps on Mac; Windows VM fallback~~ (v0.5)
 4. ~~Android apps, Proton for games, double-click on Mac, installers become native apps~~ (v0.6)
 5. ~~App icons for installed programs; clean removal; `update`~~ (v0.7.1)
-6. A small graphical library of everything installed
-7. Package as a signed Mac app, a Windows installer and a Linux package (no Python needed)
+6. ~~Right-click actions (extract, compress) and double-click extract; Wine kept warm~~ (v0.8)
+7. A small graphical library of everything installed
+8. Package as a signed Mac app, a Windows installer and a Linux package (no Python needed)
 
 ## Licence
 

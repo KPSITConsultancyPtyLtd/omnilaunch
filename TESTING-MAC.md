@@ -1,6 +1,6 @@
 # Testing OmniLaunch on a Mac
 
-Steps 1–5 take about 20 minutes, most of it waiting for Wine to download the first time.
+Steps 1–6 take about 25 minutes, most of it waiting for Wine to download the first time.
 When something doesn't match "Expect", copy what you see, plus the log (step 7).
 
 ## 1. Update OmniLaunch
@@ -54,7 +54,26 @@ and Box64 (on Apple Silicon).
 Installed 7-Zip during earlier testing? Run `./bin/omnilaunch apps scan` once: it recreates
 the app with its icon and Desktop shortcut.
 
-## 5. Remove a program cleanly
+## 5. Extract and compress from Finder (no 7-Zip window)
+
+```bash
+./bin/omnilaunch actions
+```
+
+Expect: lines for the three Quick Actions and `Double-click extracts: .7z, .rar, …`. (OmniLaunch
+also does this by itself after installing 7-Zip.)
+
+1. Double-click any `.7z` file. Expect: a notification *Extracted … to …* and a folder next to
+   the archive, with no 7-Zip window. macOS may ask once whether to use "Extract with 7-Zip" for
+   `.7z`: choose it.
+2. Right-click a file or folder › **Quick Actions** › **Compress to .7z with 7-Zip**. Expect: a
+   `.7z` next to it. Several items selected → `Archive.7z`.
+3. Do the same again within 15 minutes: it should start noticeably faster the second time.
+
+Quick Actions not in the menu? System Settings › Keyboard › Keyboard Shortcuts › Services ›
+Files and Folders, and tick them. Or use the menu: Finder › Services.
+
+## 6. Remove a program cleanly
 
 ```bash
 ./bin/omnilaunch apps list
@@ -68,7 +87,7 @@ Windows environment was kept. `apps remove "…" --with-data` also deletes that 
 Also from earlier testing: if `./bin/omnilaunch envs list` still shows `wine/7zFM-…`, remove
 that leftover duplicate with `./bin/omnilaunch envs remove wine/7zFM-…` (use the full name shown).
 
-## 6. Optional: Windows apps without Rosetta (what macOS 28 will use)
+## 7. Optional: Windows apps without Rosetta (what macOS 28 will use)
 
 Needs Homebrew (for Podman) or OrbStack, and about 30 minutes the first time.
 
@@ -82,7 +101,7 @@ PuTTY's window opens through XQuartz. OmniLaunch now switches on XQuartz's "allo
 clients" setting itself and restarts XQuartz if needed; if no window appears the very first
 time, log out and back in once and try again.
 
-## 7. If something goes wrong
+## 8. If something goes wrong
 
 The log of double-clicked apps:
 

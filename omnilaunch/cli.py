@@ -46,6 +46,16 @@ def main(argv: list[str] | None = None) -> int:
     rm = esub.add_parser("remove", help="delete an environment (the app's settings and data inside it)")
     rm.add_argument("name", help="name as shown by 'envs list', e.g. wine/notepad-1a2b3c4d")
 
+    do = sub.add_parser("do", help="do a job with an installed Windows program, e.g. extract an archive "
+                                   "with 7-Zip, without opening its window")
+    do.add_argument("action", nargs="?", help="what to do: extract, compress-7z, compress-zip (see `do --list`)")
+    do.add_argument("files", nargs="*")
+    do.add_argument("--list", action="store_true", help="list the actions and whether they're available")
+    do.add_argument("--gui", action="store_true", help="report with notifications instead of the terminal")
+
+    ac = sub.add_parser("actions", help="right-click menus and double-click handling for those jobs")
+    ac.add_argument("what", nargs="?", choices=["install", "remove"], default="install")
+
     ap = sub.add_parser("apps", help="Windows programs installed through OmniLaunch, as apps on this computer")
     asub = ap.add_subparsers(dest="apps_cmd")
     asub.add_parser("list", help="list the launchers OmniLaunch has created")
@@ -97,6 +107,10 @@ def main(argv: list[str] | None = None) -> int:
         return _doctor()
     if ns.cmd == "update":
         return _update()
+    if ns.cmd == "do":
+        return _do(ns)
+    if ns.cmd == "actions":
+        return _actions(ns)
     if ns.cmd == "envs":
         return _envs(ns, e)
     if ns.cmd == "integrate":
@@ -249,14 +263,18 @@ def _run_windows_app(lp, env: dict, gui: bool) -> int:
     before = shortcuts.find_shortcuts(lp.prefix)
     code = subprocess.call(lp.argv, cwd=lp.cwd or None, env=env)
     # Installers often hand off to a child process and exit early: wait for everything in the environment.
-    wineserver = os.path.join(os.path.dirname(lp.argv[0]), "wineserver")
-    if "WINEPREFIX" in env and os.path.exists(wineserver):
+    wineserver = runners.find_wineserver(lp.argv[0]) if lp.runner.startswith("wine") else None
+    if "WINEPREFIX" in env and wineserver:
         try:
             subprocess.run([wineserver, "-w"], env=env, timeout=3600)
         except (OSError, subprocess.SubprocessError):
             pass
     env_name = os.path.relpath(lp.prefix, os.path.join(runners.data_dir(), "prefixes")).replace(os.sep, "/")
     added = shortcuts.add_new_programs(lp.prefix, env_name, before)
+    if lp.runner.startswith("wine"):
+        runners.warm_wineserver(lp.argv[0], lp.prefix)   # next launch of anything in here starts faster
+    if added:
+        _refresh_actions_quietly()
     if added:
         where = "Applications > OmniLaunch Apps" if runners.HOST_OS == "macos" else "your app menu"
         if shortcuts.desktop_shortcuts_enabled() and shortcuts.desktop_dir():
@@ -401,6 +419,46 @@ def _setup(ns: argparse.Namespace) -> int:
     return code
 
 
+def _do(ns: argparse.Namespace) -> int:
+    from . import actions
+    if ns.list or not ns.action:
+        found = {a.id: (env, exe) for a, env, exe in actions.available()}
+        for a in actions.ACTIONS:
+            where = f"ready ({found[a.id][0] or 'native'})" if a.id in found else f"needs {a.program} installed"
+            print(f"  {a.id:14} {a.label:32} {where}")
+        return 0
+    return actions.run(ns.action, ns.files, gui=ns.gui)
+
+
+def _actions(ns: argparse.Namespace) -> int:
+    from . import actions, contextmenu
+    if ns.what == "remove":
+        removed = contextmenu.remove()
+        print("Removed: " + ", ".join(removed) if removed else "Nothing to remove.")
+        return 0
+    if not actions.available():
+        print("No installed program offers actions yet. Install 7-Zip (double-click its Windows installer), "
+              "then run this again.")
+        return 0
+    for line in contextmenu.install():
+        print(f"  + {line}")
+    if runners.HOST_OS == "macos":
+        print("In Finder: right-click a file > Quick Actions. If they don't show, enable them in "
+              "System Settings > Keyboard > Keyboard Shortcuts > Services > Files and Folders.")
+    return 0
+
+
+def _refresh_actions_quietly() -> list:
+    """After programs are added, offer their jobs in the right-click menus without being asked."""
+    try:
+        from . import actions, contextmenu
+        if actions.available():
+            return contextmenu.install()
+    except Exception:   # menus are a convenience: never fail an install or scan because of them
+        pass
+    return []
+
+
 def _update() -> int:
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if not os.path.isdir(os.path.join(repo, ".git")):
@@ -477,6 +535,9 @@ def _apps(ns: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if total:
         print(f"\nAdded {total} app(s) to {shortcuts.launcher_dir()}" +
               ("" if ns.no_desktop or not shortcuts.desktop_shortcuts_enabled() else " and your Desktop") + ".")
+    menus = _refresh_actions_quietly()
+    if menus:
+        print("Right-click actions: " + "; ".join(menus))
     else:
         print("No installed programs found in the Start Menu of any environment.")
     return 0

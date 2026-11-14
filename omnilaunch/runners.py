@@ -225,6 +225,13 @@ def host_path_for_windows(arg: str) -> str:
     return "Z:" + arg.replace("/", "\\")
 
 
+def _dll_overrides() -> str:
+    """Wine's menu-entry maker stays off (OmniLaunch makes launchers itself); overrides the user set
+    are kept, not replaced."""
+    own = os.environ.get("WINEDLLOVERRIDES", "").strip(";")
+    return "winemenubuilder.exe=d" + (";" + own if own else "")
+
+
 def enclosing_env(path: str) -> str | None:
     """If an app lives inside one of OmniLaunch's environments (a program an installer put there),
     the name of that environment, e.g. "wine/7z2606-x64-8dc73050". Running the program there
@@ -621,7 +628,7 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
             # umu-launcher runs Proton inside Valve's Steam Linux Runtime, exactly as Steam would,
             # downloading Proton itself the first time. This is what makes most games just work.
             env.update({"WINEPREFIX": root, "GAMEID": os.environ.get("OMNILAUNCH_GAMEID", "0"),
-                        "WINEDLLOVERRIDES": "winemenubuilder.exe=d"})
+                        "WINEDLLOVERRIDES": _dll_overrides()})
             if proton and os.path.exists(proton):
                 env["PROTONPATH"] = os.path.dirname(os.path.abspath(proton))
             notes.append("Running through Proton (umu-launcher). The first launch downloads Proton and "
@@ -645,13 +652,42 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
     if HOST_OS == "macos" and HOST_ARCH == "arm64" and not rosetta_installed():
         notes.append("Wine on Apple Silicon needs Rosetta 2: softwareupdate --install-rosetta --agree-to-license")
     # Wine's own menu-entry maker is off: OmniLaunch adds installed programs to the app menu itself.
-    env = {"WINEPREFIX": root, "WINEDLLOVERRIDES": "winemenubuilder.exe=d"}
+    env = {"WINEPREFIX": root, "WINEDLLOVERRIDES": _dll_overrides()}
     if not verbose:
         env["WINEDEBUG"] = "-all"
 
     argv = [wine, *special.get(ext, []), info.executable, *[host_path_for_windows(a) for a in args]]
     label = f"wine ({ext.lstrip('.')})" if ext in special else "wine"
     return LaunchPlan(label, argv, env, notes, prefix=root)
+
+
+WARM_SECONDS = 900   # keep each environment's Wine server up 15 minutes after its last program exits
+
+
+def find_wineserver(wine: str) -> str | None:
+    """Wine's server program, which distributions keep in different places."""
+    here = os.path.dirname(os.path.realpath(wine))
+    for path in (os.path.join(os.path.dirname(wine), "wineserver"), os.path.join(here, "wineserver"),
+                 os.path.join(here, "wineserver64"), "/usr/lib/wine/wineserver64", "/usr/lib/wine/wineserver",
+                 "/usr/lib/x86_64-linux-gnu/wine/wineserver"):
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return which("wineserver")
+
+
+def warm_wineserver(wine: str, prefix: str) -> bool:
+    """Keep this environment's Wine server running for a while, so the next launch skips its start-up.
+    Call it after a program (and anything it started) has finished: normally the server quits a few
+    seconds after the last Windows program closes."""
+    server = find_wineserver(wine)
+    if not server or not os.path.isdir(os.path.join(prefix, "drive_c")):
+        return False
+    try:
+        subprocess.Popen([server, f"-p{WARM_SECONDS}"], env={**os.environ, "WINEPREFIX": prefix},
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=(os.name != "nt"))
+    except OSError:
+        return False
+    return True
 
 
 def _wine_hint() -> str:

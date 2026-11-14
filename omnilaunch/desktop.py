@@ -308,21 +308,24 @@ def _launch_services():
     return cf, cs, cfstr, pystr
 
 
-def mac_default_handlers(set_defaults: bool = False) -> dict:
-    """{extension: bundle id of the app that opens it}; optionally make OmniLaunch the default first.
-    Raises RuntimeError with the reason if macOS refuses."""
+def mac_default_handlers(set_defaults: bool = False, extensions: list | None = None,
+                         bundle_id: str | None = None) -> dict:
+    """{extension: bundle id of the app that opens it}; optionally make `bundle_id` (OmniLaunch.app by
+    default) the default first. Raises RuntimeError with the reason if macOS refuses."""
+    extensions = extensions or MAC_EXTENSIONS
+    bundle_id = bundle_id or MAC_BUNDLE_ID
     _cf, cs, cfstr, pystr = _launch_services()
     roles_all = 0xFFFFFFFF
     tag_class = cfstr("public.filename-extension")
     result, errors = {}, []
-    for ext in MAC_EXTENSIONS:
+    for ext in extensions:
         uti_ref = cs.UTTypeCreatePreferredIdentifierForTag(tag_class, cfstr(ext), None)
         uti = pystr(uti_ref)
         if not uti:
             errors.append(f".{ext}: macOS has no type for it")
             continue
         if set_defaults:
-            status = cs.LSSetDefaultRoleHandlerForContentType(cfstr(uti), roles_all, cfstr(MAC_BUNDLE_ID))
+            status = cs.LSSetDefaultRoleHandlerForContentType(cfstr(uti), roles_all, cfstr(bundle_id))
             if status != 0:
                 errors.append(f".{ext} ({uti}): LaunchServices error {status}")
         result[ext] = pystr(cs.LSCopyDefaultRoleHandlerForContentType(cfstr(uti), roles_all)) or "none"
@@ -390,8 +393,16 @@ def _osascript(*lines: str, args: tuple = ()) -> subprocess.CompletedProcess:
     return subprocess.run([*argv, *args], capture_output=True, text=True)
 
 
+def _no_dialogs() -> bool:
+    """OMNILAUNCH_NO_DIALOGS=1: unattended runs (CI, scripts) print instead of showing dialogs."""
+    return os.environ.get("OMNILAUNCH_NO_DIALOGS") == "1"
+
+
 def ask(title: str, message: str, yes: str = "Install", no: str = "Not Now") -> bool:
     """Ask a yes/no question in a dialog. Returns False if no dialog could be shown."""
+    if _no_dialogs():
+        print(f"[omnilaunch] (would ask) {message}", file=sys.stderr)
+        return False
     try:
         if runners.HOST_OS == "macos":
             r = _osascript("on run argv",
@@ -415,6 +426,9 @@ def ask(title: str, message: str, yes: str = "Install", no: str = "Not Now") -> 
 
 def alert(title: str, message: str) -> None:
     """Show an error the user must see (they double-clicked something and nothing else will tell them)."""
+    if _no_dialogs():
+        print(f"[omnilaunch] (alert) {title}: {message}", file=sys.stderr)
+        return
     try:
         if runners.HOST_OS == "macos":
             _osascript("on run argv", "display alert (item 1 of argv) message (item 2 of argv) as critical",
@@ -436,6 +450,9 @@ def alert(title: str, message: str) -> None:
 
 def notify(title: str, body: str) -> None:
     """Show a desktop notification (progress messages when there's no terminal)."""
+    if _no_dialogs():
+        print(f"[omnilaunch] (notify) {body}", file=sys.stderr)
+        return
     try:
         _notify(title, body)
     except Exception:

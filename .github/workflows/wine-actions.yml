@@ -1,0 +1,44 @@
+name: wine-actions
+
+# The 7-Zip scenario with real Wine and the real 7-Zip installer. A few minutes; runs when the
+# actions, launcher or Wine code changes, or when started by hand from the Actions tab.
+on:
+  push:
+    paths:
+      - "omnilaunch/actions.py"
+      - "omnilaunch/contextmenu.py"
+      - "omnilaunch/shortcuts.py"
+      - "omnilaunch/runners.py"
+      - "omnilaunch/cli.py"
+      - "tests/ci_wine_actions.py"
+      - ".github/workflows/wine-actions.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: wine-actions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  seven-zip:
+    name: Real 7-Zip through Wine (install, app, menus, compress, extract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Wine
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wine wine64 xvfb
+          wine --version
+      - name: 7-Zip end to end
+        run: xvfb-run -a python tests/ci_wine_actions.py
+        env:
+          OMNILAUNCH_HOME: ${{ runner.temp }}/omnilaunch
+          XDG_DATA_HOME: ${{ runner.temp }}/xdg
+          XDG_DESKTOP_DIR: ${{ runner.temp }}/Desktop
+          OMNILAUNCH_NO_DIALOGS: "1"
+          WINEDLLOVERRIDES: "mscoree,mshtml="
+          WINEDEBUG: "-all"
