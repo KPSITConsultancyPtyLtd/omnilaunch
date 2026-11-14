@@ -72,6 +72,12 @@ class IconTests(TmpCase):
         self.assertIn("X-OmniLaunch-Env=wine/foo-1", text)
 
 
+class DesktopDirTests(TmpCase):
+    def test_missing_desktop_folder_is_skipped(self):
+        with mock.patch.dict(os.environ, {"XDG_DESKTOP_DIR": os.path.join(self.d, "nope")}):
+            self.assertIsNone(shortcuts.desktop_dir())
+
+
 class RemoveTests(TmpCase):
     def install(self, env, name):
         root = os.path.join(runners.data_dir(), "prefixes", *env.split("/"))

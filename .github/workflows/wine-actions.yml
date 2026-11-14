@@ -34,7 +34,9 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends wine wine64 xvfb
           wine --version
       - name: 7-Zip end to end
-        run: xvfb-run -a python tests/ci_wine_actions.py
+        run: |
+          mkdir -p "$RUNNER_TEMP/Desktop"
+          xvfb-run -a python tests/ci_wine_actions.py
         env:
           OMNILAUNCH_HOME: ${{ runner.temp }}/omnilaunch
           XDG_DATA_HOME: ${{ runner.temp }}/xdg

@@ -45,8 +45,9 @@ if not found:
 
 # 2. it became an app, and its jobs are in the file manager's menus
 names = [shortcuts.launcher_name(p) for p in shortcuts.list_launchers()]
-check("7-Zip File Manager added to the app menu", "7-Zip File Manager" in names, ", ".join(names))
-desk = os.listdir(os.environ["XDG_DESKTOP_DIR"])
+check("7-Zip File Manager added to the app menu (and nothing else)", names == ["7-Zip File Manager"],
+      ", ".join(names))
+desk = os.listdir(os.environ["XDG_DESKTOP_DIR"]) if os.path.isdir(os.environ["XDG_DESKTOP_DIR"]) else []
 check("Desktop shortcut created", any("7-zip" in d for d in desk), ", ".join(desk))
 scripts = os.path.join(os.environ["XDG_DATA_HOME"], "nautilus", "scripts")
 check("right-click actions set up", os.path.exists(os.path.join(scripts, "Extract Here with 7-Zip")),

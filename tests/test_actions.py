@@ -179,6 +179,8 @@ class MenuTests(Base):
         extract = open(os.path.join(os.environ["XDG_DATA_HOME"], "applications", "omnilaunch-extract.desktop")).read()
         self.assertIn("application/x-7z-compressed", extract)
         self.assertTrue(any(d.startswith("Double-click extracts") for d in done))
+        from omnilaunch import shortcuts
+        self.assertEqual(shortcuts.list_launchers(), [])     # the extract helper isn't one of the user's apps
         self.assertEqual(len(contextmenu.remove()), 5)
 
     def test_apps_scan_sets_up_menus_when_7zip_is_installed(self):

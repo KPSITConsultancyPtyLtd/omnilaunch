@@ -142,7 +142,8 @@ def launcher_dir() -> str:
 
 def desktop_dir() -> str | None:
     if os.environ.get("XDG_DESKTOP_DIR"):
-        return os.path.expanduser(os.environ["XDG_DESKTOP_DIR"])
+        path = os.path.expanduser(os.environ["XDG_DESKTOP_DIR"])
+        return path if os.path.isdir(path) else None
     if runners.HOST_OS == "linux" and runners.which("xdg-user-dir"):
         try:
             out = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True, text=True, timeout=5).stdout.strip()
@@ -315,13 +316,16 @@ def add_new_programs(prefix: str, env_name: str, before: dict) -> list:
 
 
 def list_launchers() -> list:
+    """Launchers for installed programs (not OmniLaunch's own helpers such as Extract with 7-Zip)."""
     folder = launcher_dir()
     if not os.path.isdir(folder):
         return []
     if runners.HOST_OS == "macos":
-        return sorted(os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".app"))
-    return sorted(os.path.join(folder, n) for n in os.listdir(folder)
-                  if n.startswith("omnilaunch-") and n.endswith(".desktop"))
+        found = [os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".app")]
+    else:
+        found = [os.path.join(folder, n) for n in os.listdir(folder)
+                 if n.startswith("omnilaunch-") and n.endswith(".desktop")]
+    return sorted(p for p in found if launcher_env(p))   # every program launcher names its environment
 
 
 def launcher_env(path: str) -> str:
