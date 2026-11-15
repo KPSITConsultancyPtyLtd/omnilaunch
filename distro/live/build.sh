@@ -13,16 +13,17 @@ mkdir -p "$(realpath /root)"
 # The OS image itself, so installing needs no network. It's kept as plain files (podman's vfs storage,
 # one layer) rather than compressed archives: the ISO's squashfs then stores each file only once,
 # shared with the identical file in this live system, which roughly halves the ISO.
-test -f /payload/index.json || { echo "The OS image must be mounted at /payload (see Containerfile.live)" >&2; exit 1; }
-command -v skopeo >/dev/null || dnf install -y skopeo
-mkdir -p /etc/containers
+test -f /payload/vfs-images/images.json || {
+    echo "The OS image must be mounted at /payload as podman vfs storage (see Containerfile.live)" >&2; exit 1; }
+mkdir -p /etc/containers /var/lib/containers
 cat > /etc/containers/storage.conf <<'EOF'
 [storage]
 driver = "vfs"
 runroot = "/run/containers/storage"
 graphroot = "/var/lib/containers/storage"
 EOF
-skopeo copy oci:/payload:latest containers-storage:localhost/omnilaunch-os:latest
+rm -rf /var/lib/containers/storage
+cp -a /payload /var/lib/containers/storage
 
 # ---------------------------------------------------------------- boot from USB
 dnf install -y dracut-live livesys-scripts
