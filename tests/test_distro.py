@@ -40,7 +40,8 @@ class ScriptTests(unittest.TestCase):
 
     def test_installer_installs_the_image_shipped_on_the_usb(self):
         live = open(os.path.join(ROOT, "distro", "live", "build.sh")).read()
-        self.assertIn("ostreecontainer --url=/usr/share/omnilaunch-os/payload:latest --transport=oci", live)
+        self.assertIn("ostreecontainer --url=localhost/omnilaunch-os:latest --transport=containers-storage", live)
+        self.assertIn('driver = "vfs"', live)          # plain files, so the ISO stores them once
         iso = open(os.path.join(ROOT, "distro", "live", "iso.yaml")).read()
         self.assertIn("root=live:CDLABEL=@LABEL@", iso)
 

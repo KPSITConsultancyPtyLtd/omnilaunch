@@ -67,7 +67,11 @@ jobs:
 
       - name: Build the live USB image
         run: |
-          sudo TMPDIR="$WORK/tmp" skopeo copy containers-storage:localhost/omnilaunch-os:latest "oci:$WORK/payload:latest"
+          # What the installer installs: the OS image squashed to one layer, so it's stored once on the USB.
+          echo "FROM localhost/omnilaunch-os:latest" | \
+            sudo TMPDIR="$WORK/tmp" podman build --squash-all -t localhost/omnilaunch-os-flat:latest -f - .
+          sudo TMPDIR="$WORK/tmp" skopeo copy containers-storage:localhost/omnilaunch-os-flat:latest "oci:$WORK/payload:latest"
+          sudo podman rmi localhost/omnilaunch-os-flat:latest
           sudo TMPDIR="$WORK/tmp" podman build --cap-add sys_admin --security-opt label=disable \
             -v "$WORK/payload:/payload:ro" \
             -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
@@ -80,7 +84,7 @@ jobs:
                 bash "$RUNNER_TEMP/titanoboa/main.sh")
           name="OmniLaunch-OS-${{ matrix.arch }}.iso"
           sudo mv "$iso" "$WORK/iso/$name"
-          sudo chown "$(id -u):$(id -g)" "$WORK/iso/$name"
+          sudo chown -R "$(id -u):$(id -g)" "$WORK/iso"
           (cd "$WORK/iso" && sha256sum "$name" | tee "$name.sha256")
           ls -lh "$WORK/iso"
           echo "ISO=$WORK/iso/$name" >> "$GITHUB_ENV"
