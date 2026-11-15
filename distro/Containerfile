@@ -1,0 +1,18 @@
+# OmniLaunch OS: Fedora Kinoite (KDE) with everything OmniLaunch needs, as a bootable container.
+# Builds for x86_64 and aarch64. Run from the repository root:
+#   sudo podman build -t localhost/omnilaunch-os -f distro/Containerfile .
+ARG FEDORA=44
+FROM quay.io/fedora-ostree-desktops/kinoite:${FEDORA}
+
+COPY omnilaunch /src/omnilaunch
+COPY bin /src/bin
+COPY LICENSE NOTICE /src/
+COPY distro/build /src/distro/build
+
+# The GitHub token (optional) only avoids GitHub's download rate limit when finding the Intel Wine build.
+RUN --mount=type=secret,id=github_token \
+    export GITHUB_TOKEN="$(cat /run/secrets/github_token 2>/dev/null || true)" && \
+    bash /src/distro/build/install-layer.sh --image /src && \
+    rm -rf /src
+
+RUN bootc container lint

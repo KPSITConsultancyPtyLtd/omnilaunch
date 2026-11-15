@@ -26,6 +26,12 @@ installs it, and opens the app. Each app gets its own isolated environment.
 **Not possible:** Mac apps on Windows. Nothing exists that runs them there, and Apple's licence
 only allows macOS on Apple hardware. OmniLaunch says so clearly instead of failing.
 
+## OmniLaunch OS
+
+Prefer a whole system with everything built in? **OmniLaunch OS** is a Fedora KDE-based Linux with
+OmniLaunch and all its helpers preinstalled. It boots from a USB stick on PCs and runs in UTM on a Mac,
+and the same setup can be layered onto Fedora Asahi Remix on Apple Silicon. See [distro/README.md](distro/README.md).
+
 ## Get started
 
 Needs Python 3.9+ and git (Mac: `xcode-select --install`; Windows: Python from python.org and

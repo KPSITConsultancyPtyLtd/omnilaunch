@@ -461,6 +461,11 @@ def _refresh_actions_quietly() -> list:
 
 def _update() -> int:
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.exists(os.path.join(repo, ".omnilaunch-os")):
+        print("OmniLaunch comes with OmniLaunch OS and is updated with the rest of the system.\n"
+              "On OmniLaunch OS run:  sudo bootc upgrade     (on Fedora Asahi: sudo dnf upgrade, then run\n"
+              "distro/install-on-fedora.sh from a fresh copy of the OmniLaunch repository)")
+        return 0
     if not os.path.isdir(os.path.join(repo, ".git")):
         print("This copy wasn't installed from git. Update it with:\n"
               "  pip install --upgrade git+https://github.com/KPSITConsultancyPtyLtd/omnilaunch")

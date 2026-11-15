@@ -614,7 +614,11 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
     if not os.path.isdir(os.path.join(root, "drive_c")) and not os.path.isdir(os.path.join(root, "pfx")):
         notes.append("First launch: setting up the Windows environment can take a minute.")
     if HOST_OS == "linux" and HOST_ARCH not in ("x86_64", "x86") and info.arch in ("x86_64", "x86"):
-        notes.append("x86 Windows app on an ARM host: needs Wine built with box64/FEX (e.g. via Hangover).")
+        if which("FEXInterpreter"):
+            notes.append("Intel Windows app on ARM: Wine and the app are translated by FEX, so expect it to be slower.")
+        else:
+            notes.append("x86 Windows app on an ARM host: needs an Intel Wine translated by FEX or box64 "
+                         "(built into OmniLaunch OS).")
     ext = os.path.splitext(info.executable.lower())[1]
 
     special = {".msi": ["msiexec", "/i"], ".bat": ["cmd", "/c"], ".cmd": ["cmd", "/c"], ".lnk": ["start", "/unix"]}
