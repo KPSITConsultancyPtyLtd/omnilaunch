@@ -42,6 +42,8 @@ class ScriptTests(unittest.TestCase):
         live = open(os.path.join(ROOT, "distro", "live", "build.sh")).read()
         self.assertIn("ostreecontainer --url=localhost/omnilaunch-os:latest --transport=containers-storage", live)
         self.assertIn('driver = "vfs"', live)          # plain files, so the ISO stores them once
+        wf = open(os.path.join(ROOT, ".github", "workflows", "distro.yml")).read()
+        self.assertIn("/rootfs/var/lib/containers/storage:ro", wf)
         iso = open(os.path.join(ROOT, "distro", "live", "iso.yaml")).read()
         self.assertIn("root=live:CDLABEL=@LABEL@", iso)
 

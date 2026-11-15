@@ -34,7 +34,9 @@ jobs:
       - name: Make room and use the biggest disk
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost \
-            /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell || true
+            /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell /usr/lib/jvm /opt/microsoft /opt/az \
+            /opt/google /usr/local/lib/node_modules /usr/share/miniconda /opt/pipx /usr/lib/google-cloud-sdk \
+            /usr/local/julia* /usr/local/share/chromium /opt/mssql-tools /usr/share/kotlinc || true
           sudo docker system prune -af >/dev/null 2>&1 || true
           root_free=$(df --output=avail -k / | tail -1)
           mnt_free=$(df --output=avail -k /mnt 2>/dev/null | tail -1 || echo 0)
@@ -67,28 +69,42 @@ jobs:
 
       - name: Build the live USB image
         run: |
-          # What the installer installs: the OS image squashed to one layer, so it's stored once on the USB.
+          sudo TMPDIR="$WORK/tmp" podman build -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
+          # What the installer installs: the OS image squashed to one layer in a vfs store (plain files),
+          # so the ISO's squashfs stores each file once, shared with the identical live-system file.
           echo "FROM localhost/omnilaunch-os:latest" | \
             sudo TMPDIR="$WORK/tmp" podman build --squash-all -t localhost/omnilaunch-os-flat:latest -f - .
           sudo TMPDIR="$WORK/tmp" skopeo copy containers-storage:localhost/omnilaunch-os-flat:latest \
             "containers-storage:[vfs@$WORK/payload+/run/omnilaunch-payload]localhost/omnilaunch-os:latest"
           sudo podman rmi localhost/omnilaunch-os-flat:latest
-          sudo TMPDIR="$WORK/tmp" podman build --userns=host --cap-add sys_admin --security-opt label=disable \
-            -v "$WORK/payload:/payload:ro" \
-            -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
-          sudo rm -rf "$WORK/payload"
+          sudo podman image prune -f
+          df -h "$WORK"
 
       - name: Make the .iso (titanoboa)
         run: |
           git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"
-          iso=$(TITANOBOA_CTR_IMAGE=localhost/omnilaunch-os-live:latest TITANOBOA_OUTPUT_DIR="$WORK/iso" \
-                bash "$RUNNER_TEMP/titanoboa/main.sh")
+          # titanoboa's main.sh, plus the installer's OS store attached inside the live system.
+          sudo podman run --rm -i --cap-add sys_admin --security-opt label=disable \
+            -v "$RUNNER_TEMP/titanoboa/build_iso.sh:/src/build_iso.sh:ro" \
+            --mount type=image,source=localhost/omnilaunch-os-live:latest,dst=/rootfs \
+            -v "$WORK/payload:/rootfs/var/lib/containers/storage:ro" \
+            -v "$WORK/iso:/output" \
+            quay.io/fedora/fedora:latest /src/build_iso.sh
           name="OmniLaunch-OS-${{ matrix.arch }}.iso"
-          sudo mv "$iso" "$WORK/iso/$name"
+          sudo mv "$WORK/iso/OmniLaunch-OS.iso" "$WORK/iso/$name"
           sudo chown -R "$(id -u):$(id -g)" "$WORK/iso"
           (cd "$WORK/iso" && sha256sum "$name" | tee "$name.sha256")
           ls -lh "$WORK/iso"
           echo "ISO=$WORK/iso/$name" >> "$GITHUB_ENV"
+
+      - name: Check the payload made it into the live system
+        run: |
+          sudo apt-get install -yq squashfs-tools >/dev/null
+          xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" >/dev/null 2>&1 || \
+            { sudo apt-get install -yq xorriso >/dev/null; xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" >/dev/null 2>&1; }
+          sudo unsquashfs -l "$WORK/squashfs.img" 'var/lib/containers/storage/vfs-images/*' | tee payload.txt
+          grep -q images.json payload.txt
+          rm -f "$WORK/squashfs.img"
 
       - name: Check the .iso has its boot files and live system
         run: |
