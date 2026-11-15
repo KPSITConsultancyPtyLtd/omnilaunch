@@ -100,11 +100,11 @@ jobs:
       - name: Check the installer's copy of the OS is in the live system
         run: |
           sudo apt-get install -yq squashfs-tools xorriso >/dev/null
-          xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" >/dev/null 2>&1
+          sudo xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" 2>&1 | tail -2
           sudo unsquashfs -l "$WORK/squashfs.img" 'usr/share/omnilaunch-os/payload/*' | tee payload.txt
           grep -q 'payload/index.json' payload.txt && grep -q 'payload/blobs/sha256/' payload.txt
           sudo unsquashfs -lln "$WORK/squashfs.img" etc/brlapi.key 2>/dev/null | tail -1   # real owners kept
-          rm -f "$WORK/squashfs.img"
+          sudo rm -f "$WORK/squashfs.img"
 
       - name: Check the .iso has its boot files and live system
         run: |
