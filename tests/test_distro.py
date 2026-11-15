@@ -38,6 +38,18 @@ class ScriptTests(unittest.TestCase):
             r = subprocess.run(["bash", "-n", os.path.join(ROOT, path)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"{path}: {r.stderr}")
 
+    def test_containerfiles_are_well_formed(self):
+        for name, base in (("Containerfile", "quay.io/fedora-ostree-desktops/kinoite:${FEDORA}"),
+                           ("Containerfile.live", "localhost/omnilaunch-os:latest")):
+            with open(os.path.join(ROOT, "distro", name)) as f:
+                lines = f.read().splitlines()
+            froms = [l for l in lines if l.startswith("FROM ")]
+            self.assertEqual(froms, [f"FROM {base}"], name)
+            for l in lines:
+                if l.startswith("#"):
+                    self.assertFalse(l.rstrip().endswith("\\"), f"{name}: comment continues onto the next line: {l}")
+                self.assertEqual(l.count('"') % 2, 0, f"{name}: unbalanced quote: {l}")
+
     def test_installer_installs_the_image_shipped_on_the_usb(self):
         live = open(os.path.join(ROOT, "distro", "live", "build.sh")).read()
         self.assertIn("ostreecontainer --url=/usr/share/omnilaunch-os/payload:latest --transport=oci", live)

@@ -70,9 +70,9 @@ jobs:
       - name: Build the live USB image
         run: |
           sudo TMPDIR="$WORK/tmp" podman build -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
-          # What the installer installs: the OS image's layers as built, uncompressed so the ISO's
-          # squashfs can compress them well.
-          sudo TMPDIR="$WORK/tmp" skopeo copy --dest-decompress \
+          # What the installer installs: the OS image's layers exactly as built (compressed, so the build
+          # machine's disk holds it comfortably).
+          sudo TMPDIR="$WORK/tmp" skopeo copy \
             containers-storage:localhost/omnilaunch-os:latest "oci:$WORK/payload:latest"
           sudo podman image prune -f
           df -h "$WORK"
