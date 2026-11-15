@@ -41,7 +41,7 @@ jobs:
           if [ "${mnt_free:-0}" -gt "$root_free" ]; then work=/mnt/work; else work=/var/tmp/work; fi
           sudo mkdir -p "$work/containers" "$work/tmp" "$work/iso" "$work/payload"
           sudo chmod 1777 "$work/tmp"
-          printf '[storage]\ndriver = "overlay"\ngraphroot = "%s/containers"\n' "$work" | sudo tee /etc/containers/storage.conf
+          printf '[storage]\ndriver = "overlay"\nrunroot = "/run/containers/storage"\ngraphroot = "%s/containers"\n' "$work" | sudo tee /etc/containers/storage.conf
           echo "WORK=$work" >> "$GITHUB_ENV"
           df -h / /mnt 2>/dev/null || df -h /
 
