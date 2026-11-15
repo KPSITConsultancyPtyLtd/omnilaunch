@@ -1,5 +1,6 @@
 """OmniLaunch OS: the parts of OmniLaunch that behave differently when it comes with the system."""
 import io
+import json
 import os
 import subprocess
 import sys
@@ -67,3 +68,19 @@ class ScriptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProtonSetupTests(unittest.TestCase):
+    def test_fedora_without_the_package_uses_umu_release_build(self):
+        from omnilaunch import provision, runners
+        inst = mock.Mock(dry_run=False)
+        releases = [{"tag_name": "1.3", "assets": [
+            {"name": "umu-launcher-1.3-zipapp.tar", "browser_download_url": "https://x/umu-launcher-1.3-zipapp.tar"}]}]
+        with mock.patch.object(runners, "which", side_effect=lambda *n: "/usr/bin/dnf" if "dnf" in n else None), \
+                mock.patch.object(provision.subprocess, "run", return_value=mock.Mock(returncode=1)), \
+                mock.patch.object(provision, "_fetch", side_effect=[json.dumps(releases), None]) as fetch, \
+                mock.patch.object(runners, "find_umu", return_value="/x/umu-run"), \
+                mock.patch.object(runners, "data_dir", return_value=tempfile.mkdtemp()):
+            provision._install_proton(inst)
+        self.assertNotIn(["sudo", "dnf", "install", "-y", "umu-launcher"], [c.args[0] for c in inst.run.call_args_list])
+        self.assertEqual(fetch.call_args_list[1].args[0], "https://x/umu-launcher-1.3-zipapp.tar")

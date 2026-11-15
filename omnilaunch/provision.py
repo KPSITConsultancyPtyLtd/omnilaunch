@@ -31,6 +31,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 """
 
+UMU_ZIPAPP_PATTERNS = [r"zipapp.*\.tar(\.gz|\.xz)?$"]
 UMU_RELEASES_API = "https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases?per_page=5"
 WINE_X64_RELEASES_API = "https://api.github.com/repos/Kron4ek/Wine-Builds/releases?per_page=50"
 BOX64_RELEASES_API = "https://api.github.com/repos/ptitSeb/box64/releases?per_page=5"
@@ -232,9 +233,11 @@ def _install_wine(inst: Installer) -> None:
 
 def _install_proton(inst: Installer) -> None:
     # Arch and Fedora package umu-launcher; elsewhere use the self-contained zipapp from its releases.
-    for mgr, cmd in (("pacman", ["sudo", "pacman", "-S", "--needed", "--noconfirm", "umu-launcher"]),
-                     ("dnf", ["sudo", "dnf", "install", "-y", "umu-launcher"])):
-        if runners.which(mgr):
+    # Fedora's repositories don't always carry it (Fedora 44 doesn't), so ask dnf before relying on it.
+    for mgr, probe, cmd in (
+            ("pacman", None, ["sudo", "pacman", "-S", "--needed", "--noconfirm", "umu-launcher"]),
+            ("dnf", ["dnf", "-q", "info", "umu-launcher"], ["sudo", "dnf", "install", "-y", "umu-launcher"])):
+        if runners.which(mgr) and (probe is None or subprocess.run(probe, capture_output=True).returncode == 0):
             inst.run(cmd)
             return
     dest = os.path.join(runners.data_dir(), "umu")
@@ -243,7 +246,7 @@ def _install_proton(inst: Installer) -> None:
     if inst.dry_run:
         return
     releases = json.loads(_fetch(UMU_RELEASES_API))
-    name, url = pick_release_asset(releases, [r"zipapp.*\.tar(\.gz|\.xz)?$"])
+    name, url = pick_release_asset(releases, UMU_ZIPAPP_PATTERNS)
     tmp = tempfile.mkdtemp(prefix="omnilaunch-")
     archive = os.path.join(tmp, name)
     inst.log(f"downloading {name} ...")

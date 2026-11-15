@@ -28,7 +28,7 @@ common=(
 )
 x86_64=(
     wine wine-mono winetricks   # Windows programs
-    umu-launcher                # Proton, the way Steam runs Windows games
+    umu-launcher                # Proton, the way Steam runs Windows games (else from its releases)
     gamemode
     vulkan-loader.i686 mesa-vulkan-drivers.i686
 )
@@ -76,6 +76,25 @@ print(name, url)')
     echo "$name" > /usr/lib/omnilaunch-wine/OMNILAUNCH-SOURCE
 fi
 
+# ---------------------------------------------------------------- Proton launcher, when Fedora lacks it
+if [[ $ARCH == x86_64 ]] && ! command -v umu-run >/dev/null; then
+    log "Installing umu-launcher (Proton) from its releases"
+    read -r name url < <(PYTHONPATH="$SRC" python3 -c '
+import json
+from omnilaunch import provision as p
+print(*p.pick_release_asset(json.loads(p._fetch(p.UMU_RELEASES_API)), p.UMU_ZIPAPP_PATTERNS))')
+    echo "using $name"
+    tmp=$(mktemp -d)
+    curl -fsSL --retry 4 -o "$tmp/$name" "$url"
+    rm -rf /usr/lib/umu && mkdir -p /usr/lib/umu
+    tar -xf "$tmp/$name" -C /usr/lib/umu
+    rm -rf "$tmp"
+    umu=$(find /usr/lib/umu -name umu-run -type f | head -1)
+    [[ -n $umu ]] || { echo "umu-run not found in $name" >&2; exit 1; }
+    chmod 755 "$umu"
+    ln -sfn "$umu" /usr/bin/umu-run
+fi
+
 # ---------------------------------------------------------------- OmniLaunch
 log "Installing OmniLaunch"
 rm -rf /usr/lib/omnilaunch && mkdir -p /usr/lib/omnilaunch
@@ -95,6 +114,7 @@ PYTHONPATH=/usr/lib/omnilaunch python3 - <<'EOF'
 import os
 from omnilaunch import desktop
 
+desktop.launcher_command = lambda: "/usr/bin/omnilaunch"
 with open("/usr/share/applications/omnilaunch.desktop", "w") as f:
     f.write(desktop.desktop_entry())
 
