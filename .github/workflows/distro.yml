@@ -75,9 +75,9 @@ jobs:
 
       - name: Make the .iso (titanoboa)
         run: |
-          git clone --depth 1 https://github.com/ublue-os/titanoboa "$WORK/titanoboa"
+          git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"
           iso=$(TITANOBOA_CTR_IMAGE=localhost/omnilaunch-os-live:latest TITANOBOA_OUTPUT_DIR="$WORK/iso" \
-                bash "$WORK/titanoboa/main.sh")
+                bash "$RUNNER_TEMP/titanoboa/main.sh")
           name="OmniLaunch-OS-${{ matrix.arch }}.iso"
           sudo mv "$iso" "$WORK/iso/$name"
           sudo chown "$(id -u):$(id -g)" "$WORK/iso/$name"
