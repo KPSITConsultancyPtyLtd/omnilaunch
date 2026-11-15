@@ -26,7 +26,7 @@ class UpdateTests(unittest.TestCase):
             with redirect_stdout(out):
                 self.assertEqual(cli.main(["update"]), 0)
         self.assertIn("comes with OmniLaunch OS", out.getvalue())
-        self.assertIn("bootc upgrade", out.getvalue())
+        self.assertIn("newer OmniLaunch OS", out.getvalue())
         run.assert_not_called()                    # no git pull on a system copy
 
 
@@ -40,10 +40,10 @@ class ScriptTests(unittest.TestCase):
 
     def test_installer_installs_the_image_shipped_on_the_usb(self):
         live = open(os.path.join(ROOT, "distro", "live", "build.sh")).read()
-        self.assertIn("ostreecontainer --url=localhost/omnilaunch-os:latest --transport=containers-storage", live)
-        self.assertIn('driver = "vfs"', live)          # plain files, so the ISO stores them once
+        self.assertIn("ostreecontainer --url=/usr/share/omnilaunch-os/payload:latest --transport=oci", live)
         wf = open(os.path.join(ROOT, ".github", "workflows", "distro.yml")).read()
-        self.assertIn("/rootfs/var/lib/containers/storage:ro", wf)
+        self.assertIn("/rootfs/usr/share/omnilaunch-os/payload:ro", wf)
+        self.assertNotIn("--squash", wf)              # the installed image keeps its layers as built
         iso = open(os.path.join(ROOT, "distro", "live", "iso.yaml")).read()
         self.assertIn("root=live:CDLABEL=@LABEL@", iso)
 

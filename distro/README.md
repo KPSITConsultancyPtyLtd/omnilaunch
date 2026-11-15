@@ -18,7 +18,7 @@ Games with kernel-level anti-cheat (Valorant, many competitive shooters) refuse 
 GitHub builds it: **Actions → distro → the latest run → Artifacts**. There's one `.iso` per CPU type, and
 each is kept for a day. To build a fresh one, use **Run workflow**.
 
-- **PC (Intel/AMD):** `OmniLaunch-OS-x86_64.iso`. Write it to a USB stick (8 GB or larger) with
+- **PC (Intel/AMD):** `OmniLaunch-OS-x86_64.iso`. Write it to a USB stick (16 GB or larger) with
   [Fedora Media Writer](https://fedoraproject.org/workstation/download) or balenaEtcher, then boot from it.
   It starts a live session you can try. The **Install to Hard Drive** icon installs it.
 - **Try it on a Mac first:** `OmniLaunch-OS-aarch64.iso` in [UTM](https://mac.getutm.app). Create a new

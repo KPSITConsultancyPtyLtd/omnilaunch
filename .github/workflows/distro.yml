@@ -70,24 +70,24 @@ jobs:
       - name: Build the live USB image
         run: |
           sudo TMPDIR="$WORK/tmp" podman build -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
-          # What the installer installs: the OS image squashed to one layer in a vfs store (plain files),
-          # so the ISO's squashfs stores each file once, shared with the identical live-system file.
-          echo "FROM localhost/omnilaunch-os:latest" | \
-            sudo TMPDIR="$WORK/tmp" podman build --squash-all -t localhost/omnilaunch-os-flat:latest -f - .
-          sudo TMPDIR="$WORK/tmp" skopeo copy containers-storage:localhost/omnilaunch-os-flat:latest \
-            "containers-storage:[vfs@$WORK/payload+/run/omnilaunch-payload]localhost/omnilaunch-os:latest"
-          sudo podman rmi localhost/omnilaunch-os-flat:latest
+          # What the installer installs: the OS image's layers as built, uncompressed so the ISO's
+          # squashfs can compress them well.
+          sudo TMPDIR="$WORK/tmp" skopeo copy --dest-decompress \
+            containers-storage:localhost/omnilaunch-os:latest "oci:$WORK/payload:latest"
           sudo podman image prune -f
           df -h "$WORK"
 
       - name: Make the .iso (titanoboa)
         run: |
           git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"
-          # titanoboa's main.sh, plus the installer's OS store attached inside the live system.
+          # titanoboa's main.sh, plus the installer's copy of the OS attached inside the live system.
+          # Keep files' real owners (titanoboa makes everything root's, which is wrong for a few files).
+          sed -i 's/ -all-root//' "$RUNNER_TEMP/titanoboa/build_iso.sh"
+          grep -q -- '-all-root' "$RUNNER_TEMP/titanoboa/build_iso.sh" && { echo "couldn't patch titanoboa"; exit 1; }
           sudo podman run --rm -i --cap-add sys_admin --security-opt label=disable \
             -v "$RUNNER_TEMP/titanoboa/build_iso.sh:/src/build_iso.sh:ro" \
             --mount type=image,source=localhost/omnilaunch-os-live:latest,dst=/rootfs \
-            -v "$WORK/payload:/rootfs/var/lib/containers/storage:ro" \
+            -v "$WORK/payload:/rootfs/usr/share/omnilaunch-os/payload:ro" \
             -v "$WORK/iso:/output" \
             quay.io/fedora/fedora:latest /src/build_iso.sh
           name="OmniLaunch-OS-${{ matrix.arch }}.iso"
@@ -97,13 +97,13 @@ jobs:
           ls -lh "$WORK/iso"
           echo "ISO=$WORK/iso/$name" >> "$GITHUB_ENV"
 
-      - name: Check the payload made it into the live system
+      - name: Check the installer's copy of the OS is in the live system
         run: |
-          sudo apt-get install -yq squashfs-tools >/dev/null
-          xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" >/dev/null 2>&1 || \
-            { sudo apt-get install -yq xorriso >/dev/null; xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" >/dev/null 2>&1; }
-          sudo unsquashfs -l "$WORK/squashfs.img" 'var/lib/containers/storage/vfs-images/*' | tee payload.txt
-          grep -q images.json payload.txt
+          sudo apt-get install -yq squashfs-tools xorriso >/dev/null
+          xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" >/dev/null 2>&1
+          sudo unsquashfs -l "$WORK/squashfs.img" 'usr/share/omnilaunch-os/payload/*' | tee payload.txt
+          grep -q 'payload/index.json' payload.txt && grep -q 'payload/blobs/sha256/' payload.txt
+          sudo unsquashfs -lln "$WORK/squashfs.img" etc/brlapi.key 2>/dev/null | tail -1   # real owners kept
           rm -f "$WORK/squashfs.img"
 
       - name: Check the .iso has its boot files and live system

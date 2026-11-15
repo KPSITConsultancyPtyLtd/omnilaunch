@@ -10,18 +10,10 @@ LABEL=OmniLaunch-OS
 mkdir -p "$(realpath /root)"
 
 # ---------------------------------------------------------------- what the installer installs
-# The OS image itself, so installing needs no network. It's kept as plain files (podman's vfs storage,
-# one layer) rather than compressed archives: the ISO's squashfs then stores each file only once,
-# shared with the identical file in this live system, which roughly halves the ISO.
-# The store itself is attached at /var/lib/containers/storage only while the ISO is assembled (see
-# .github/workflows/distro.yml), so the build never holds an extra copy of it.
-mkdir -p /etc/containers /var/lib/containers/storage
-cat > /etc/containers/storage.conf <<'EOF'
-[storage]
-driver = "vfs"
-runroot = "/run/containers/storage"
-graphroot = "/var/lib/containers/storage"
-EOF
+# The OS image itself, so installing needs no network: an OCI folder with the image's layers exactly as
+# built (installing a re-packed image risks ostree mishandling it). It's attached at this path only
+# while the ISO is assembled (see .github/workflows/distro.yml), so the build never holds extra copies.
+mkdir -p /usr/share/omnilaunch-os/payload
 
 # ---------------------------------------------------------------- boot from USB
 dnf install -y dracut-live livesys-scripts
@@ -54,7 +46,7 @@ EOF
 cat >> /usr/share/anaconda/interactive-defaults.ks <<'EOF'
 
 # Install OmniLaunch OS from the copy on this USB stick.
-ostreecontainer --url=localhost/omnilaunch-os:latest --transport=containers-storage --no-signature-verification
+ostreecontainer --url=/usr/share/omnilaunch-os/payload:latest --transport=oci --no-signature-verification
 EOF
 
 # ---------------------------------------------------------------- what titanoboa needs

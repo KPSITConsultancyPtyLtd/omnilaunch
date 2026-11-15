@@ -1,8 +1,8 @@
 # The live USB: OmniLaunch OS that boots from a USB stick (try it without installing), with an
 # installer that puts OmniLaunch OS on the disk. Built on top of the OS image:
 #   sudo podman build -t localhost/omnilaunch-os-live -f distro/Containerfile.live .
-# What the installer installs is the OS image squashed to one layer in a podman vfs store, which is
-# attached at /var/lib/containers/storage when titanoboa (github.com/ublue-os/titanoboa) turns this
+# What the installer installs is the OS image as an OCI folder, attached at
+# /usr/share/omnilaunch-os/payload when titanoboa (github.com/ublue-os/titanoboa) turns this
 # image into an .iso. See .github/workflows/distro.yml for the exact commands.
 FROM localhost/omnilaunch-os:latest" | sudo podman build --squash-all -t localhost/omnilaunch-os-flat -f - .
 #   sudo skopeo copy containers-storage:localhost/omnilaunch-os-flat:latest \
