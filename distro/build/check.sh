@@ -17,6 +17,16 @@ check "default app for .exe files" grep -h '^application/x-ms-dos-executable=omn
 check "default app for .apk files" grep -h '^application/vnd.android.package-archive=omnilaunch.desktop' /etc/xdg/mimeapps.list
 check "OmniLaunch desktop entry" grep -h '^Exec=/usr/bin/omnilaunch run --gui %f' /usr/share/applications/omnilaunch.desktop
 check "update says it comes with the system" bash -c 'omnilaunch update | grep -q "comes with OmniLaunch OS"'
+KVER=$(cat /usr/lib/modules/.omnilaunch-kernel 2>/dev/null)
+check "exactly one kernel, the newest ($KVER)" bash -c '[ "$(ls /usr/lib/modules)" = "'"$KVER"'" ]'
+check "start-up image built for it" test -s "/usr/lib/modules/$KVER/initramfs.img"
+check "all firmware and extra drivers" rpm -q linux-firmware kernel-modules-extra amd-gpu-firmware intel-gpu-firmware
+check "NTSYNC (faster Wine/Proton games)" bash -c 'grep -Eq "^CONFIG_NTSYNC=(y|m)" /usr/lib/modules/'"$KVER"'/config && grep -qx ntsync /usr/lib/modules-load.d/ntsync.conf'
+check "hardware video decoding for all codecs" rpm -q mesa-va-drivers-freeworld
+check "automatic updates" systemctl is-enabled omnilaunch-os-update.timer
+check "omnilaunch-os helper" bash -c 'omnilaunch-os help | grep -q rollback'
+check "Flathub in Discover" grep -q "dl.flathub.org" /etc/flatpak/remotes.d/flathub.flatpakrepo
+check "Distrobox (apps from other Linux distros)" rpm -q distrobox
 check "Waydroid (Android apps)" rpm -q waydroid
 check "Podman (other Linux apps)" rpm -q podman
 
@@ -29,6 +39,11 @@ sys.stdout.buffer.write(bytes(h))
 EOF
 
 if [[ $ARCH == x86_64 ]]; then
+    check "NVIDIA open driver for this kernel" bash -c 'modinfo -k '"$KVER"' -F license nvidia | grep -q MIT'
+    check "NVIDIA driver and 32-bit game libraries" rpm -q xorg-x11-drv-nvidia xorg-x11-drv-nvidia-libs.i686 libva-nvidia-driver
+    check "NVIDIA chosen over nouveau at boot" grep -q "nvidia-drm.modeset=1" /usr/lib/bootc/kargs.d/00-nvidia.toml
+    check "no driver rebuilds on a read-only system" bash -c '! rpm -q akmods'
+    check "Steam, Gamescope, MangoHud" rpm -q steam gamescope mangohud
     check "Wine" wine --version
     check "Proton launcher (umu)" command -v umu-run
     check "a Windows app is planned with Wine/Proton" bash -c 'omnilaunch run --dry-run /tmp/app.exe 2>&1 | grep -Ei "wine|proton"'

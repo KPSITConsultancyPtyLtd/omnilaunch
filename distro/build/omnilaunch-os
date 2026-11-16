@@ -1,0 +1,45 @@
+#!/usr/bin/bash
+# omnilaunch-os: look after OmniLaunch OS in plain words.
+#   omnilaunch-os status      what's installed and whether an update is waiting
+#   omnilaunch-os update      download the newest OmniLaunch OS now (used on the next restart)
+#   omnilaunch-os rollback    go back to the previous version on the next restart
+#   omnilaunch-os enroll-key  let the NVIDIA driver load with Secure Boot on
+set -euo pipefail
+need_root() { if [[ $EUID -ne 0 ]]; then exec sudo "$0" "$@"; fi; }
+
+case ${1:-status} in
+    status)
+        . /usr/lib/os-release
+        echo "$PRETTY_NAME"
+        echo "Kernel: $(uname -r)"
+        bootc status --format=humanreadable 2>/dev/null || bootc status
+        ;;
+    update|upgrade)
+        need_root "$@"
+        echo "Checking for a newer OmniLaunch OS..."
+        bootc upgrade
+        echo "If an update was downloaded, it's used from the next restart. Your files and apps stay."
+        ;;
+    rollback)
+        need_root "$@"
+        bootc rollback
+        echo "The previous version is used from the next restart. (You can also pick it in the boot menu.)"
+        ;;
+    enroll-key)
+        need_root "$@"
+        cert=/usr/share/omnilaunch-os/secure-boot.der
+        if [[ ! -f $cert ]]; then
+            echo "This build's NVIDIA driver isn't signed. Turn Secure Boot off in your PC's firmware settings,"
+            echo "or see distro/make-secure-boot-key.sh in the OmniLaunch repository."
+            exit 1
+        fi
+        echo "Choose a one-time password. After restarting, a blue 'MOK management' screen appears:"
+        echo "choose Enroll MOK, Continue, Yes, type this password, then Reboot."
+        mokutil --import "$cert"
+        ;;
+    -h|--help|help)
+        sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+        ;;
+    *)
+        echo "Unknown command: $1 (try: omnilaunch-os help)" >&2; exit 2 ;;
+esac

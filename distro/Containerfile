@@ -2,17 +2,35 @@
 # Builds for x86_64 and aarch64. Run from the repository root:
 #   sudo podman build -t localhost/omnilaunch-os -f distro/Containerfile .
 ARG FEDORA=44
-FROM quay.io/fedora-ostree-desktops/kinoite:${FEDORA}
 
+# 1. The newest Fedora kernel and all firmware.
+FROM quay.io/fedora-ostree-desktops/kinoite:${FEDORA} AS base
+COPY distro/build/kernel.sh /tmp/kernel.sh
+RUN bash /tmp/kernel.sh && rm /tmp/kernel.sh
+
+# 2. NVIDIA's open driver, built for exactly that kernel in a throwaway stage (x86_64 only).
+FROM base AS nvidia
+COPY distro/build/nvidia-kmod.sh /tmp/nvidia-kmod.sh
+RUN --mount=type=secret,id=mok_key --mount=type=secret,id=mok_cert bash /tmp/nvidia-kmod.sh
+
+# 3. OmniLaunch OS.
+FROM base
+LABEL org.opencontainers.image.title="OmniLaunch OS" \
+      org.opencontainers.image.description="Linux that opens apps from every system: Windows, Android and Linux" \
+      org.opencontainers.image.source="https://github.com/KPSITConsultancyPtyLtd/omnilaunch" \
+      containers.bootc="1"
+
+COPY --from=nvidia /out /tmp/nvidia
 COPY omnilaunch /src/omnilaunch
 COPY bin /src/bin
 COPY LICENSE NOTICE /src/
 COPY distro/build /src/distro/build
 
-# The GitHub token (optional) only avoids GitHub's download rate limit when finding the Intel Wine build.
+# The GitHub token (optional) only avoids GitHub's download rate limit when finding release builds.
 RUN --mount=type=secret,id=github_token \
     export GITHUB_TOKEN="$(cat /run/secrets/github_token 2>/dev/null || true)" && \
+    bash /src/distro/build/drivers.sh && \
     bash /src/distro/build/install-layer.sh --image /src && \
-    rm -rf /src
+    rm -rf /src /tmp/nvidia
 
 RUN bootc container lint

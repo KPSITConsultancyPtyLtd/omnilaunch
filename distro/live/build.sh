@@ -10,10 +10,9 @@ LABEL=OmniLaunch-OS
 mkdir -p "$(realpath /root)"
 
 # ---------------------------------------------------------------- what the installer installs
-# The OS image itself, so installing needs no network: an OCI folder with the image's layers exactly as
-# built (installing a re-packed image risks ostree mishandling it). It's attached at this path only
-# while the ISO is assembled (see .github/workflows/distro.yml), so the build never holds extra copies.
-mkdir -p /usr/share/omnilaunch-os/payload
+# The installer downloads OmniLaunch OS from its online registry, so the installed system gets
+# automatic updates from there and the USB stays small.
+IMAGE_REF=${IMAGE_REF:?the online image to install, e.g. ghcr.io/owner/omnilaunch-os:latest}
 
 # ---------------------------------------------------------------- boot from USB
 dnf install -y dracut-live livesys-scripts
@@ -43,11 +42,12 @@ btrfs_compression = zstd:1
 [Localization]
 use_geolocation = False
 EOF
-cat >> /usr/share/anaconda/interactive-defaults.ks <<'EOF'
+cat >> /usr/share/anaconda/interactive-defaults.ks <<EOF
 
-# Install OmniLaunch OS from the copy on this USB stick.
-ostreecontainer --url=/usr/share/omnilaunch-os/payload:latest --transport=oci --no-signature-verification
+# Install OmniLaunch OS from its online registry (needs internet during installation).
+ostreecontainer --url=${IMAGE_REF} --no-signature-verification
 EOF
+echo "${IMAGE_REF}" > /usr/share/omnilaunch-os-installs
 
 # ---------------------------------------------------------------- what titanoboa needs
 case $ARCH in

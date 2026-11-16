@@ -1,9 +1,12 @@
 name: distro
 
-# Builds OmniLaunch OS for PCs (x86_64) and ARM (aarch64): the OS image, checks it, then a live USB
-# .iso with an installer. ISOs are kept for one day under the run's Artifacts (they're several GB).
+# Builds OmniLaunch OS for PCs (x86_64) and ARM (aarch64): the OS image, checks it, publishes it to
+# ghcr.io (installed systems update from there), then a live USB .iso with an installer. ISOs are kept
+# for one day under the run's Artifacts. Rebuilt weekly so the kernel, drivers and apps stay current.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 16 * * 5"     # Saturdays 3:17am Sydney time
   push:
     branches: [main]
     paths: ["distro/**", ".github/workflows/distro.yml"]
@@ -14,6 +17,10 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/kpsitconsultancyptyltd/omnilaunch-os
 
 jobs:
   build:
@@ -41,7 +48,7 @@ jobs:
           root_free=$(df --output=avail -k / | tail -1)
           mnt_free=$(df --output=avail -k /mnt 2>/dev/null | tail -1 || echo 0)
           if [ "${mnt_free:-0}" -gt "$root_free" ]; then work=/mnt/work; else work=/var/tmp/work; fi
-          sudo mkdir -p "$work/containers" "$work/tmp" "$work/iso" "$work/payload"
+          sudo mkdir -p "$work/containers" "$work/tmp" "$work/iso"
           sudo chmod 1777 "$work/tmp"
           printf '[storage]\ndriver = "overlay"\nrunroot = "/run/containers/storage"\ngraphroot = "%s/containers"\n' "$work" | sudo tee /etc/containers/storage.conf
           echo "WORK=$work" >> "$GITHUB_ENV"
@@ -56,38 +63,56 @@ jobs:
       - name: Build the OS image
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MOK_KEY: ${{ secrets.MOK_KEY }}
+          MOK_CERT: ${{ secrets.MOK_CERT }}
         run: |
-          umask 077; printf '%s' "$GITHUB_TOKEN" > "$WORK/tmp/token"; umask 022
+          umask 077
+          printf '%s' "$GITHUB_TOKEN" > "$WORK/tmp/token"
+          # Optional Secure Boot signing key for the NVIDIA driver (see distro/make-secure-boot-key.sh).
+          printf '%s' "$MOK_KEY" | base64 -d > "$WORK/tmp/mok_key" 2>/dev/null || : > "$WORK/tmp/mok_key"
+          printf '%s' "$MOK_CERT" | base64 -d > "$WORK/tmp/mok_cert" 2>/dev/null || : > "$WORK/tmp/mok_cert"
+          umask 022
+          [ -s "$WORK/tmp/mok_key" ] && echo "Signing the NVIDIA driver for Secure Boot" || echo "No MOK_KEY secret: NVIDIA driver unsigned"
           sudo TMPDIR="$WORK/tmp" podman build --pull=newer \
             --secret id=github_token,src="$WORK/tmp/token" \
+            --secret id=mok_key,src="$WORK/tmp/mok_key" \
+            --secret id=mok_cert,src="$WORK/tmp/mok_cert" \
             -t localhost/omnilaunch-os:latest -f distro/Containerfile .
-          rm -f "$WORK/tmp/token"
+          rm -f "$WORK/tmp/token" "$WORK/tmp/mok_key" "$WORK/tmp/mok_cert"
+          sudo podman image prune -f >/dev/null
           sudo podman images
 
       - name: Check the OS image
         run: sudo podman run --rm -v "$PWD/distro/build/check.sh:/check.sh:ro" localhost/omnilaunch-os:latest bash /check.sh
 
+      - name: Publish the OS image (installed systems update from here)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GITHUB_TOKEN" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          day=$(date -u +%Y%m%d)
+          for tag in "latest-${{ matrix.arch }}" "$day-${{ matrix.arch }}"; do
+            sudo podman push --retry 3 localhost/omnilaunch-os:latest "docker://$IMAGE:$tag"
+          done
+          sudo podman logout ghcr.io
+
       - name: Build the live USB image
         run: |
-          sudo TMPDIR="$WORK/tmp" podman build -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
-          # What the installer installs: the OS image's layers exactly as built (compressed, so the build
-          # machine's disk holds it comfortably).
-          sudo TMPDIR="$WORK/tmp" skopeo copy \
-            containers-storage:localhost/omnilaunch-os:latest "oci:$WORK/payload:latest"
-          sudo podman image prune -f
+          sudo TMPDIR="$WORK/tmp" podman build --build-arg IMAGE_REF="$IMAGE:latest" \
+            -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
+          sudo podman image prune -f >/dev/null
           df -h "$WORK"
 
       - name: Make the .iso (titanoboa)
         run: |
           git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"
-          # titanoboa's main.sh, plus the installer's copy of the OS attached inside the live system.
-          # Keep files' real owners (titanoboa makes everything root's, which is wrong for a few files).
+          # titanoboa's main.sh. Keep files' real owners (titanoboa makes everything root's, which is wrong for a few files).
           sed -i 's/ -all-root//' "$RUNNER_TEMP/titanoboa/build_iso.sh"
           grep -q -- '-all-root' "$RUNNER_TEMP/titanoboa/build_iso.sh" && { echo "couldn't patch titanoboa"; exit 1; }
           sudo podman run --rm -i --cap-add sys_admin --security-opt label=disable \
             -v "$RUNNER_TEMP/titanoboa/build_iso.sh:/src/build_iso.sh:ro" \
             --mount type=image,source=localhost/omnilaunch-os-live:latest,dst=/rootfs \
-            -v "$WORK/payload:/rootfs/usr/share/omnilaunch-os/payload:ro" \
             -v "$WORK/iso:/output" \
             quay.io/fedora/fedora:latest /src/build_iso.sh
           name="OmniLaunch-OS-${{ matrix.arch }}.iso"
@@ -97,14 +122,14 @@ jobs:
           ls -lh "$WORK/iso"
           echo "ISO=$WORK/iso/$name" >> "$GITHUB_ENV"
 
-      - name: Check the installer's copy of the OS is in the live system
+      - name: Check the installer installs OmniLaunch OS from the registry
         run: |
           sudo apt-get install -yq squashfs-tools xorriso >/dev/null
-          sudo xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" 2>&1 | tail -2
-          sudo unsquashfs -l "$WORK/squashfs.img" 'usr/share/omnilaunch-os/payload/*' | tee payload.txt
-          grep -q 'payload/index.json' payload.txt && grep -q 'payload/blobs/sha256/' payload.txt
-          sudo unsquashfs -lln "$WORK/squashfs.img" etc/brlapi.key 2>/dev/null | tail -1   # real owners kept
+          sudo xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" 2>&1 | tail -1
+          sudo unsquashfs -cat "$WORK/squashfs.img" usr/share/anaconda/interactive-defaults.ks | tee ks.txt | tail -3
+          grep -q "ostreecontainer --url=$IMAGE:latest" ks.txt
           sudo rm -f "$WORK/squashfs.img"
+          size=$(stat -c %s "$ISO"); echo "ISO size: $((size / 1024 / 1024)) MB"
 
       - name: Check the .iso has its boot files and live system
         run: |
@@ -146,3 +171,26 @@ jobs:
             ${{ env.ISO }}.sha256
           retention-days: 1
           compression-level: 0
+
+  publish:
+    name: One image name for both PC and ARM
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Combine the PC and ARM images under :latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          day=$(date -u +%Y%m%d)
+          docker buildx imagetools create -t "$IMAGE:latest" -t "$IMAGE:$day" \
+            "$IMAGE:latest-x86_64" "$IMAGE:latest-aarch64"
+          docker buildx imagetools inspect "$IMAGE:latest"
+          # Anonymous access is what installs and updates use; it works once the package is public.
+          docker logout ghcr.io
+          if docker manifest inspect "$IMAGE:latest" >/dev/null 2>&1; then
+            echo "PASS  $IMAGE:latest is public: installs and updates will work"
+          else
+            echo "::warning::$IMAGE is private. Make it public so installs and updates work: GitHub → your profile → Packages → omnilaunch-os → Package settings → Change visibility → Public"
+          fi

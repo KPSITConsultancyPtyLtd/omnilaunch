@@ -21,12 +21,13 @@ log() { printf '\n==> %s\n' "$*"; }
 common=(
     python3            # OmniLaunch itself
     waydroid           # Android apps, in a container sharing this kernel
-    podman             # Linux apps built for other distributions or CPUs
+    podman distrobox   # Linux apps built for other distributions or CPUs
     xdg-utils          # file associations
     7zip cabextract unzip
     vulkan-loader mesa-vulkan-drivers
 )
 x86_64=(
+    steam gamescope mangohud    # games: Steam, its game-mode compositor, an fps overlay
     wine wine-mono winetricks   # Windows programs
     umu-launcher                # Proton, the way Steam runs Windows games (else from its releases)
     gamemode
@@ -45,6 +46,13 @@ case $ARCH in
     aarch64) wanted=("${common[@]}" "${aarch64[@]}"); required=("${required_aarch64[@]}") ;;
     *) echo "OmniLaunch OS supports x86_64 and aarch64, not $ARCH" >&2; exit 1 ;;
 esac
+
+if [[ $ARCH == x86_64 ]] && ! rpm -q rpmfusion-nonfree-release >/dev/null 2>&1; then
+    log "Enabling RPM Fusion (Steam)"
+    dnf -y install \
+        "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+        "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
+fi
 
 log "Installing compatibility helpers for $ARCH"
 dnf -y install --skip-unavailable "${wanted[@]}"
@@ -152,6 +160,41 @@ if $IMAGE; then
         -e 's|^HOME_URL=.*|HOME_URL="https://github.com/KPSITConsultancyPtyLtd/omnilaunch"|' \
         /usr/lib/os-release
     grep -q '^VARIANT_ID=' /usr/lib/os-release || echo 'VARIANT_ID=omnilaunch-os' >> /usr/lib/os-release
+
+    log "Easy upkeep: automatic updates, the omnilaunch-os helper, Flathub in Discover"
+    install -m 0755 "$SRC/distro/build/omnilaunch-os" /usr/bin/omnilaunch-os
+    cat > /usr/lib/systemd/system/omnilaunch-os-update.service <<'EOF'
+[Unit]
+Description=Download the newest OmniLaunch OS (used from the next restart)
+Documentation=man:bootc-upgrade(8)
+ConditionPathExists=/run/ostree-booted
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bootc upgrade --quiet
+EOF
+    cat > /usr/lib/systemd/system/omnilaunch-os-update.timer <<'EOF'
+[Unit]
+Description=Check for a newer OmniLaunch OS every day
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl enable omnilaunch-os-update.timer
+    # The updater above replaces rpm-ostree's own, which would fight over the same deployments.
+    systemctl disable rpm-ostreed-automatic.timer 2>/dev/null || true
+
+    mkdir -p /etc/flatpak/remotes.d
+    curl -fsSL --retry 4 -o /etc/flatpak/remotes.d/flathub.flatpakrepo \
+        https://dl.flathub.org/repo/flathub.flatpakrepo
 
     # Waydroid's Android container should be ready to start whenever an .apk is opened.
     systemctl enable waydroid-container.service 2>/dev/null || true

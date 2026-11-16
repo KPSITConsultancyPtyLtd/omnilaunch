@@ -3,7 +3,7 @@ grub2:
   timeout: 10
   entries:
     - name: "Try or install OmniLaunch OS"
-      linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=@LABEL@ enforcing=0 rd.live.image"
+      linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=@LABEL@ enforcing=0 rd.live.image rd.driver.blacklist=nouveau modprobe.blacklist=nouveau nvidia-drm.modeset=1"
       initrd: "/images/pxeboot/initrd.img"
     - name: "Try or install OmniLaunch OS (safe graphics)"
       linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=@LABEL@ enforcing=0 rd.live.image nomodeset"

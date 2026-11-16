@@ -26,7 +26,7 @@ class UpdateTests(unittest.TestCase):
             with redirect_stdout(out):
                 self.assertEqual(cli.main(["update"]), 0)
         self.assertIn("comes with OmniLaunch OS", out.getvalue())
-        self.assertIn("newer OmniLaunch OS", out.getvalue())
+        self.assertIn("omnilaunch-os update", out.getvalue())
         run.assert_not_called()                    # no git pull on a system copy
 
 
@@ -34,28 +34,37 @@ class UpdateTests(unittest.TestCase):
 class ScriptTests(unittest.TestCase):
     def test_scripts_parse(self):
         for path in ("distro/build/install-layer.sh", "distro/build/check.sh", "distro/live/build.sh",
-                     "distro/install-on-fedora.sh"):
+                     "distro/install-on-fedora.sh", "distro/build/kernel.sh", "distro/build/nvidia-kmod.sh",
+                     "distro/build/drivers.sh", "distro/build/omnilaunch-os", "distro/make-secure-boot-key.sh"):
             r = subprocess.run(["bash", "-n", os.path.join(ROOT, path)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"{path}: {r.stderr}")
 
     def test_containerfiles_are_well_formed(self):
-        for name, base in (("Containerfile", "quay.io/fedora-ostree-desktops/kinoite:${FEDORA}"),
-                           ("Containerfile.live", "localhost/omnilaunch-os:latest")):
+        for name, froms_expected in (
+                ("Containerfile", ["FROM quay.io/fedora-ostree-desktops/kinoite:${FEDORA} AS base",
+                                   "FROM base AS nvidia", "FROM base"]),
+                ("Containerfile.live", ["FROM localhost/omnilaunch-os:latest"])):
             with open(os.path.join(ROOT, "distro", name)) as f:
                 lines = f.read().splitlines()
-            froms = [l for l in lines if l.startswith("FROM ")]
-            self.assertEqual(froms, [f"FROM {base}"], name)
+            self.assertEqual([l for l in lines if l.startswith("FROM ")], froms_expected, name)
             for l in lines:
                 if l.startswith("#"):
                     self.assertFalse(l.rstrip().endswith("\\"), f"{name}: comment continues onto the next line: {l}")
                 self.assertEqual(l.count('"') % 2, 0, f"{name}: unbalanced quote: {l}")
 
-    def test_installer_installs_the_image_shipped_on_the_usb(self):
+    def test_nvidia_driver_comes_from_the_build_stage_for_the_same_kernel(self):
+        cf = open(os.path.join(ROOT, "distro", "Containerfile")).read()
+        self.assertIn("COPY --from=nvidia /out /tmp/nvidia", cf)
+        kmod = open(os.path.join(ROOT, "distro", "build", "nvidia-kmod.sh")).read()
+        self.assertIn("%_with_kmod_nvidia_open 1", kmod)     # RTX 50 (Blackwell) needs the open driver
+        self.assertIn('kernel-devel-${KVER}', kmod)
+
+    def test_installer_downloads_the_published_image(self):
         live = open(os.path.join(ROOT, "distro", "live", "build.sh")).read()
-        self.assertIn("ostreecontainer --url=/usr/share/omnilaunch-os/payload:latest --transport=oci", live)
+        self.assertIn("ostreecontainer --url=${IMAGE_REF} --no-signature-verification", live)
         wf = open(os.path.join(ROOT, ".github", "workflows", "distro.yml")).read()
-        self.assertIn("/rootfs/usr/share/omnilaunch-os/payload:ro", wf)
-        self.assertNotIn("--squash", wf)              # the installed image keeps its layers as built
+        self.assertIn('--build-arg IMAGE_REF="$IMAGE:latest"', wf)
+        self.assertIn("docker buildx imagetools create", wf)
         iso = open(os.path.join(ROOT, "distro", "live", "iso.yaml")).read()
         self.assertIn("root=live:CDLABEL=@LABEL@", iso)
 
