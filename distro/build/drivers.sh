@@ -27,7 +27,7 @@ if [[ $ARCH == x86_64 ]]; then
     [[ ${#kmods[@]} -gt 0 ]] || { echo "The NVIDIA driver wasn't built" >&2; exit 1; }
     log "Installing NVIDIA's driver (open kernel module) and its 32-bit libraries for games"
     echo "%_with_kmod_nvidia_open 1" > /etc/rpm/macros.nvidia-kmod
-    dnf -y install "${kmods[@]}" \
+    dnf -y install --exclude=akmod-nvidia,akmods "${kmods[@]}" \
         xorg-x11-drv-nvidia xorg-x11-drv-nvidia-libs xorg-x11-drv-nvidia-libs.i686 \
         xorg-x11-drv-nvidia-cuda-libs xorg-x11-drv-nvidia-power nvidia-settings libva-nvidia-driver
     # akmods would try to rebuild the driver on a read-only system; the image already has it.

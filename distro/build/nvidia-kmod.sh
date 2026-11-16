@@ -16,7 +16,10 @@ dnf -y install \
     "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${fedora}.noarch.rpm" \
     "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${fedora}.noarch.rpm"
 echo "%_with_kmod_nvidia_open 1" > /etc/rpm/macros.nvidia-kmod
-dnf -y install "kernel-devel-${KVER}" akmods akmod-nvidia elfutils-libelf-devel cpio
+dnf -y install "kernel-devel-${KVER}" akmods elfutils-libelf-devel cpio
+# akmod-nvidia's install script tries to build the driver as root, which akmods refuses (and dnf treats
+# as fatal). Install it without scripts; the driver is built properly below.
+dnf -y install --setopt=tsflags=noscripts akmod-nvidia
 
 if [[ -s /run/secrets/mok_key && -s /run/secrets/mok_cert ]]; then
     echo "Signing the driver for Secure Boot"
