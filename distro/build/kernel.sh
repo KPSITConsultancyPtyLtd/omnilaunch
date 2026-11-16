@@ -44,6 +44,7 @@ else
 fi
 
 log "Building the start-up image (initramfs) for $KVER with the new firmware"
+mkdir -p "$(realpath /root)"      # /root is a link to /var/roothome, which dracut expects to exist
 DRACUT_NO_XATTR=1 dracut --no-hostonly --kver "$KVER" --reproducible --zstd --add ostree \
     -f "/usr/lib/modules/$KVER/initramfs.img"
 

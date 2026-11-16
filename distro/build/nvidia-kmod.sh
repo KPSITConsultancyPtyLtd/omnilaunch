@@ -20,7 +20,7 @@ dnf -y install "kernel-devel-${KVER}" akmods akmod-nvidia elfutils-libelf-devel 
 
 if [[ -s /run/secrets/mok_key && -s /run/secrets/mok_cert ]]; then
     echo "Signing the driver for Secure Boot"
-    install -D -m 0600 /run/secrets/mok_key /etc/pki/akmods/private/private_key.priv
+    install -D -m 0640 -o root -g akmods /run/secrets/mok_key /etc/pki/akmods/private/private_key.priv
     install -D -m 0644 /run/secrets/mok_cert /etc/pki/akmods/certs/public_key.der
     cp /etc/pki/akmods/certs/public_key.der /out/secure-boot.der
 else
@@ -28,13 +28,17 @@ else
     rm -rf /etc/pki/akmods/private /etc/pki/akmods/certs     # don't sign with a throwaway key
 fi
 
-chown -R akmods:akmods /var/cache/akmods 2>/dev/null || true
-if ! akmods --force --kernels "$KVER" --kmod nvidia; then
-    cat /var/cache/akmods/nvidia/*.log 2>/dev/null | tail -80
+# akmods refuses to build as root, so build with its own builder as the unprivileged akmods user.
+srpm=$(readlink -f /usr/src/akmods/nvidia-kmod.latest)
+[[ -f $srpm ]] || { echo "No NVIDIA driver source package: $(ls /usr/src/akmods)" >&2; exit 1; }
+work=$(mktemp -d) && chown akmods:akmods "$work" && chmod 755 "$work"
+if ! runuser -u akmods -- env HOME="$work" TMPDIR="$work" \
+        akmodsbuild --kernels "$KVER" --outputdir "$work" "$srpm"; then
+    find "$work" -name '*.log' -exec tail -80 {} +
     exit 1
 fi
-rpms=$(find /var/cache/akmods/nvidia -name "kmod-nvidia-${KVER}-*.rpm")
-[[ -n $rpms ]] || { echo "akmods made no driver package for $KVER" >&2; ls -R /var/cache/akmods; exit 1; }
+rpms=$(find "$work" -name "kmod-nvidia-${KVER}-*.rpm")
+[[ -n $rpms ]] || { echo "akmodsbuild made no driver package for $KVER" >&2; ls -R "$work"; exit 1; }
 cp $rpms /out/
 # Prove it's the open driver: its licence is "Dual MIT/GPL"; the closed one says "NVIDIA".
 rpm2cpio /out/kmod-nvidia-*.rpm | (cd /tmp && cpio -idm --quiet)
