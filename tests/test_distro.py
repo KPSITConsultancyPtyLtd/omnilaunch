@@ -16,6 +16,11 @@ from omnilaunch import cli  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _read(path):
+    with open(path) as f:
+        return f.read()
+
+
 class UpdateTests(unittest.TestCase):
     def test_update_points_to_the_system_updater_on_omnilaunch_os(self):
         real_exists = os.path.exists
@@ -35,7 +40,8 @@ class ScriptTests(unittest.TestCase):
     def test_scripts_parse(self):
         for path in ("distro/build/install-layer.sh", "distro/build/check.sh", "distro/live/build.sh",
                      "distro/install-on-fedora.sh", "distro/build/kernel.sh", "distro/build/nvidia-kmod.sh",
-                     "distro/build/drivers.sh", "distro/build/omnilaunch-os", "distro/make-secure-boot-key.sh"):
+                     "distro/build/drivers.sh", "distro/build/omnilaunch-os", "distro/make-secure-boot-key.sh",
+                     "distro/build/omnilaunch-os-apps", "distro/build/omnilaunch-os-welcome"):
             r = subprocess.run(["bash", "-n", os.path.join(ROOT, path)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"{path}: {r.stderr}")
 
@@ -53,45 +59,85 @@ class ScriptTests(unittest.TestCase):
                 self.assertEqual(l.count('"') % 2, 0, f"{name}: unbalanced quote: {l}")
 
     def test_nvidia_driver_comes_from_the_build_stage_for_the_same_kernel(self):
-        cf = open(os.path.join(ROOT, "distro", "Containerfile")).read()
+        cf = _read(os.path.join(ROOT, "distro", "Containerfile"))
         self.assertIn("COPY --from=nvidia /out /tmp/nvidia", cf)
-        kmod = open(os.path.join(ROOT, "distro", "build", "nvidia-kmod.sh")).read()
+        kmod = _read(os.path.join(ROOT, "distro", "build", "nvidia-kmod.sh"))
         self.assertIn("%_with_kmod_nvidia_open 1", kmod)     # RTX 50 (Blackwell) needs the open driver
         self.assertIn('kernel-devel-${KVER}', kmod)
 
     def test_installer_downloads_the_published_image(self):
-        live = open(os.path.join(ROOT, "distro", "live", "build.sh")).read()
+        live = _read(os.path.join(ROOT, "distro", "live", "build.sh"))
         self.assertIn("ostreecontainer --url=${IMAGE_REF} --no-signature-verification", live)
-        wf = open(os.path.join(ROOT, ".github", "workflows", "distro.yml")).read()
+        wf = _read(os.path.join(ROOT, ".github", "workflows", "distro.yml"))
         self.assertIn('--build-arg IMAGE_REF="$IMAGE:latest"', wf)
         self.assertIn("docker buildx imagetools create", wf)
-        iso = open(os.path.join(ROOT, "distro", "live", "iso.yaml")).read()
+        iso = _read(os.path.join(ROOT, "distro", "live", "iso.yaml"))
         self.assertIn("root=live:CDLABEL=@LABEL@", iso)
 
-    def test_mimeapps_merge(self):
-        """The defaults step keeps other apps' defaults and replaces only OmniLaunch's file types."""
-        layer = open(os.path.join(ROOT, "distro", "build", "install-layer.sh")).read()
-        code = layer.split("PYTHONPATH=/usr/lib/omnilaunch python3 - <<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
+    def test_default_apps_merge(self):
+        """Keeps other defaults, replaces only listed types, prefers the installed alternative,
+        and writes both the generic and KDE files."""
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "usr/share/applications"))
+        open(os.path.join(root, "usr/share/applications/firefox.desktop"), "w").close()
+        os.makedirs(os.path.join(root, "etc/xdg"))
+        with open(os.path.join(root, "etc/xdg/mimeapps.list"), "w") as f:
+            f.write("[Default Applications]\ntext/x-python=org.kde.kate.desktop\napplication/pdf=evince.desktop\n")
+        env = dict(os.environ, OMNILAUNCH_DEFAULTS_ROOT=root)
+        script = os.path.join(ROOT, "distro", "build", "set-defaults.py")
+        r = subprocess.run([sys.executable, script, os.path.join(ROOT, "distro", "build", "defaults.list")],
+                           env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        generic = _read(os.path.join(root, "etc/xdg/mimeapps.list"))
+        kde = _read(os.path.join(root, "etc/xdg/kde-mimeapps.list"))
+        self.assertIn("text/x-python=org.kde.kate.desktop", generic)
+        self.assertIn("application/pdf=org.kde.okular.desktop", generic)
+        self.assertNotIn("evince", generic)
+        self.assertIn("x-scheme-handler/https=firefox.desktop", kde)          # the one that exists
+        self.assertEqual(generic.count("[Default Applications]"), 1)
+
+    def test_every_default_app_is_installed(self):
+        """Each default is an app OmniLaunch OS ships: in the Flathub list, or part of the base system."""
+        with open(os.path.join(ROOT, "distro", "build", "apps.list")) as f:
+            flathub = {l.split()[0] for l in f if l.strip() and not l.startswith("#")}
+        base = {"firefox", "org.mozilla.firefox", "org.kde.discover"}
+        with open(os.path.join(ROOT, "distro", "build", "defaults.list")) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                for app in line.split("=", 1)[1].split("|"):
+                    app = app.removesuffix(".desktop")
+                    owner = app.rsplit(".", 1)[0] if app.startswith("org.libreoffice.LibreOffice.") else app
+                    self.assertTrue(owner in flathub or app in base, f"{line}: {app} isn't installed")
+
+    def test_app_installer_respects_architectures_and_removals(self):
         d = tempfile.mkdtemp()
-        apps = os.path.join(d, "applications")
-        os.makedirs(apps)
-        mimeapps = os.path.join(d, "mimeapps.list")
-        with open(mimeapps, "w") as f:
-            f.write("[Default Applications]\ntext/plain=org.kde.kate.desktop\n"
-                    "application/x-ms-dos-executable=wine.desktop\n")
-        code = code.replace("/usr/share/applications/omnilaunch.desktop", os.path.join(apps, "omnilaunch.desktop"))
-        code = code.replace("/etc/xdg/mimeapps.list", mimeapps)
-        with redirect_stdout(io.StringIO()):
-            exec(compile(code, "mimeapps", "exec"), {"__name__": "__main__"})
-        text = open(mimeapps).read()
-        self.assertIn("text/plain=org.kde.kate.desktop", text)
-        self.assertIn("application/x-ms-dos-executable=omnilaunch.desktop", text)
-        self.assertNotIn("wine.desktop", text)
-        self.assertEqual(text.count("[Default Applications]"), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        apps = os.path.join(d, "apps.list")
+        with open(apps, "w") as f:
+            f.write("# comment\norg.a.App   # everyone\norg.b.Game  x86_64   # PCs only\norg.c.Gone\n")
+        state = os.path.join(d, "state")
+        os.makedirs(state)
+        with open(os.path.join(state, "apps-installed"), "w") as f:
+            f.write("org.c.Gone\n")                              # installed before, then removed by the user
+        bindir = os.path.join(d, "bin")
+        os.makedirs(bindir)
+        with open(os.path.join(bindir, "flatpak"), "w") as f:
+            f.write('#!/bin/sh\n[ "$1" = install ] && echo "$6" >> "%s/calls"\nexit 0\n' % d)
+        os.chmod(os.path.join(bindir, "flatpak"), 0o755)
+        with open(os.path.join(bindir, "uname"), "w") as f:
+            f.write("#!/bin/sh\necho aarch64\n")
+        os.chmod(os.path.join(bindir, "uname"), 0o755)
+        src = _read(os.path.join(ROOT, "distro", "build", "omnilaunch-os-apps"))
+        src = src.replace("/usr/share/omnilaunch-os/apps.list", apps).replace("/var/lib/omnilaunch-os", state)
+        script = os.path.join(d, "run.sh")
+        with open(script, "w") as f:
+            f.write(src)
+        r = subprocess.run(["bash", script], env=dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"]),
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(_read(os.path.join(d, "calls")).split(), ["org.a.App"])
+        self.assertEqual(_read(os.path.join(state, "apps-status")).strip(), "done")
 
 
 class ProtonSetupTests(unittest.TestCase):

@@ -119,34 +119,15 @@ chmod 755 /usr/bin/omnilaunch
 
 log "Making OmniLaunch the default app for Windows, Android and AppImage files"
 PYTHONPATH=/usr/lib/omnilaunch python3 - <<'EOF'
-import os
 from omnilaunch import desktop
-
 desktop.launcher_command = lambda: "/usr/bin/omnilaunch"
 with open("/usr/share/applications/omnilaunch.desktop", "w") as f:
     f.write(desktop.desktop_entry())
-
-# System-wide defaults (users can still change them). Merge into any existing file.
-path = "/etc/xdg/mimeapps.list"
-lines = open(path).read().splitlines() if os.path.exists(path) else []
-ours = {f"{m}=omnilaunch.desktop" for m in desktop.MIME_TYPES}
-types = {m for m in desktop.MIME_TYPES}
-out, section = [], None
-for line in lines:
-    if line.startswith("["):
-        section = line.strip()
-    if section == "[Default Applications]" and line.split("=", 1)[0] in types:
-        continue                               # replaced below
-    out.append(line)
-if "[Default Applications]" not in [l.strip() for l in out]:
-    out += ["[Default Applications]"]
-i = [l.strip() for l in out].index("[Default Applications]") + 1
-out[i:i] = sorted(ours)
-os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "w") as f:
-    f.write("\n".join(out) + "\n")
-print(f"{len(ours)} file types -> OmniLaunch")
+with open("/tmp/omnilaunch-defaults.list", "w") as f:
+    f.writelines(f"{m}=omnilaunch.desktop\n" for m in desktop.MIME_TYPES)
 EOF
+python3 "$SRC/distro/build/set-defaults.py" /tmp/omnilaunch-defaults.list
+rm -f /tmp/omnilaunch-defaults.list
 command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
 
 # ---------------------------------------------------------------- image only
@@ -195,6 +176,61 @@ EOF
     mkdir -p /etc/flatpak/remotes.d
     curl -fsSL --retry 4 -o /etc/flatpak/remotes.d/flathub.flatpakrepo \
         https://dl.flathub.org/repo/flathub.flatpakrepo
+
+    log "Apps: chosen defaults, installed from Flathub on first start, easy to change"
+    install -D -m 0644 "$SRC/distro/build/apps.list" /usr/share/omnilaunch-os/apps.list
+    install -m 0755 "$SRC/distro/build/omnilaunch-os-apps" /usr/libexec/omnilaunch-os-apps
+    install -m 0755 "$SRC/distro/build/omnilaunch-os-welcome" /usr/libexec/omnilaunch-os-welcome
+    python3 "$SRC/distro/build/set-defaults.py" "$SRC/distro/build/defaults.list"
+    cat > /usr/lib/systemd/system/omnilaunch-os-apps.service <<'EOF'
+[Unit]
+Description=Install OmniLaunch OS's apps from Flathub
+ConditionPathExists=/run/ostree-booted
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/omnilaunch-os-apps
+Restart=on-failure
+RestartSec=10min
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl enable omnilaunch-os-apps.service
+    cat > /etc/xdg/autostart/omnilaunch-os-welcome.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=OmniLaunch OS welcome
+Exec=/usr/libexec/omnilaunch-os-welcome
+NoDisplay=true
+X-KDE-autostart-phase=2
+EOF
+    # Easy-to-find menu entries for changing default apps (they open the right System Settings pages).
+    cat > /usr/share/applications/omnilaunch-os-default-apps.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Default Apps
+Comment=Choose which app opens web links, email, music, videos and more
+Exec=systemsettings kcm_componentchooser
+Icon=preferences-desktop-default-applications
+Categories=Settings;
+Keywords=default;browser;email;open with;
+EOF
+    cat > /usr/share/applications/omnilaunch-os-file-types.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Default Apps for File Types
+Comment=Choose which app opens each kind of file
+Exec=systemsettings kcm_filetypes
+Icon=preferences-desktop-filetype-association
+Categories=Settings;
+Keywords=file type;association;open with;default;
+EOF
 
     # Waydroid's Android container should be ready to start whenever an .apk is opened.
     systemctl enable waydroid-container.service 2>/dev/null || true

@@ -28,6 +28,46 @@ set that up, turn Secure Boot off in the PC's firmware settings (everything else
 2. Add the two values it prints as repository secrets `MOK_KEY` and `MOK_CERT`.
 3. After the next build, run `omnilaunch-os enroll-key` on the PC and restart.
 
+- **Also included:** printer drivers (HP, Epson, Brother, Samsung and more) and network scanners, GPU
+  compute (OpenCL), game-controller support, fingerprint readers, and fonts that match Microsoft Office's,
+  so documents keep their layout.
+
+## Apps, ready to use
+
+After the first start, OmniLaunch OS installs these from Flathub in the background (a notification says
+when they're ready). Each updates itself and can be removed in Discover. An app you remove stays removed.
+
+| For | App | Instead of |
+|---|---|---|
+| Web, email | Firefox, Thunderbird | Chrome, Outlook |
+| Office | LibreOffice (opens Word, Excel, PowerPoint files) | Microsoft Office |
+| PDFs | Okular (read, fill in forms, sign, annotate) | Acrobat Reader |
+| Photo editing | GIMP | Photoshop |
+| Painting | Krita | Photoshop / Fresco |
+| Vector graphics | Inkscape | Illustrator |
+| RAW photos | darktable | Lightroom |
+| Video editing | Kdenlive | Premiere Pro |
+| 3D and motion | Blender | After Effects, Dimension |
+| Page layout | Scribus | InDesign |
+| Audio editing | Audacity | Audition |
+| Recording and streaming | OBS Studio | – |
+| Video conversion | HandBrake | Media Encoder |
+| Everyday | VLC (videos), Elisa (music), Gwenview (photos), Kate (text), Ark (archives), KCalc, KeePassXC (passwords), LocalSend (like AirDrop) | |
+| Games (PC) | Steam, Heroic (Epic, GOG, Amazon), ProtonUp-Qt | |
+
+**Default apps** are set for every common file type: Firefox for links, Thunderbird for email, LibreOffice
+for Office files, Okular for PDFs, Gwenview for photos, VLC for video and music, GIMP for `.psd`,
+Inkscape for `.svg` and `.ai`, darktable for camera RAW files, Ark for archives, and OmniLaunch for
+Windows and Android apps. To change them:
+
+- **App menu → Default Apps** sets the browser, email, file manager, terminal and so on.
+- **App menu → Default Apps for File Types** sets any kind of file. Or right-click a file → **Open With →
+  Other Application**, pick one, and tick **Remember**.
+
+**More apps:** open **Discover**, the app store, and search. It installs Linux apps from Flathub, and
+updates them. Windows `.exe` and Android `.apk` files just open with a double-click. From a terminal,
+`omnilaunch-os install <name>` does the same as Discover.
+
 ## Get it
 
 GitHub builds it: **Actions → distro → the latest run → Artifacts**. There's one `.iso` (about 5–6 GB) per
@@ -59,6 +99,8 @@ If an update misbehaves, pick the previous version in the boot menu, or run `omn
 omnilaunch-os status      # version, kernel, and whether an update is waiting
 omnilaunch-os update      # get the newest version now
 omnilaunch-os rollback    # back to the previous version
+omnilaunch-os apps        # app store, and how app setup is going
+omnilaunch-os defaults    # choose default apps
 ```
 
 ## How it's built

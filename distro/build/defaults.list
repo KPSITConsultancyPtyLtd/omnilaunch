@@ -1,0 +1,90 @@
+# OmniLaunch OS's default apps, by file type. Users change them in System Settings → Default
+# Applications, or by right-clicking a file → Open With → Other Application → "Remember".
+# Several apps separated by | : the first one installed on the image wins (for apps whose file name
+# differs between Fedora versions).
+
+# Web and email
+x-scheme-handler/http=org.mozilla.firefox.desktop|firefox.desktop
+x-scheme-handler/https=org.mozilla.firefox.desktop|firefox.desktop
+text/html=org.mozilla.firefox.desktop|firefox.desktop
+application/xhtml+xml=org.mozilla.firefox.desktop|firefox.desktop
+x-scheme-handler/mailto=org.mozilla.Thunderbird.desktop
+message/rfc822=org.mozilla.Thunderbird.desktop
+text/calendar=org.mozilla.Thunderbird.desktop
+
+# Documents
+application/pdf=org.kde.okular.desktop
+application/epub+zip=org.kde.okular.desktop
+application/vnd.openxmlformats-officedocument.wordprocessingml.document=org.libreoffice.LibreOffice.writer.desktop
+application/msword=org.libreoffice.LibreOffice.writer.desktop
+application/vnd.oasis.opendocument.text=org.libreoffice.LibreOffice.writer.desktop
+application/rtf=org.libreoffice.LibreOffice.writer.desktop
+application/vnd.openxmlformats-officedocument.spreadsheetml.sheet=org.libreoffice.LibreOffice.calc.desktop
+application/vnd.ms-excel=org.libreoffice.LibreOffice.calc.desktop
+application/vnd.oasis.opendocument.spreadsheet=org.libreoffice.LibreOffice.calc.desktop
+text/csv=org.libreoffice.LibreOffice.calc.desktop
+application/vnd.openxmlformats-officedocument.presentationml.presentation=org.libreoffice.LibreOffice.impress.desktop
+application/vnd.ms-powerpoint=org.libreoffice.LibreOffice.impress.desktop
+application/vnd.oasis.opendocument.presentation=org.libreoffice.LibreOffice.impress.desktop
+text/plain=org.kde.kate.desktop
+text/markdown=org.kde.kate.desktop
+
+# Pictures
+image/jpeg=org.kde.gwenview.desktop
+image/png=org.kde.gwenview.desktop
+image/gif=org.kde.gwenview.desktop
+image/webp=org.kde.gwenview.desktop
+image/avif=org.kde.gwenview.desktop
+image/heif=org.kde.gwenview.desktop
+image/tiff=org.kde.gwenview.desktop
+image/bmp=org.kde.gwenview.desktop
+image/svg+xml=org.inkscape.Inkscape.desktop
+image/x-xcf=org.gimp.GIMP.desktop
+image/vnd.adobe.photoshop=org.gimp.GIMP.desktop
+application/illustrator=org.inkscape.Inkscape.desktop
+application/x-krita=org.kde.krita.desktop
+image/x-canon-cr2=org.darktable.Darktable.desktop
+image/x-canon-cr3=org.darktable.Darktable.desktop
+image/x-nikon-nef=org.darktable.Darktable.desktop
+image/x-sony-arw=org.darktable.Darktable.desktop
+image/x-adobe-dng=org.darktable.Darktable.desktop
+image/x-fuji-raf=org.darktable.Darktable.desktop
+image/x-panasonic-rw2=org.darktable.Darktable.desktop
+image/x-olympus-orf=org.darktable.Darktable.desktop
+
+# Video and music
+video/mp4=org.videolan.VLC.desktop
+video/x-matroska=org.videolan.VLC.desktop
+video/webm=org.videolan.VLC.desktop
+video/quicktime=org.videolan.VLC.desktop
+video/x-msvideo=org.videolan.VLC.desktop
+video/mpeg=org.videolan.VLC.desktop
+video/x-ms-wmv=org.videolan.VLC.desktop
+audio/mpeg=org.videolan.VLC.desktop
+audio/flac=org.videolan.VLC.desktop
+audio/ogg=org.videolan.VLC.desktop
+audio/x-wav=org.videolan.VLC.desktop
+audio/mp4=org.videolan.VLC.desktop
+audio/aac=org.videolan.VLC.desktop
+audio/x-opus+ogg=org.videolan.VLC.desktop
+
+# Creative projects
+application/x-blender=org.blender.Blender.desktop
+application/vnd.scribus=net.scribus.Scribus.desktop
+application/x-kdenlive=org.kde.kdenlive.desktop
+
+# Archives
+application/zip=org.kde.ark.desktop
+application/x-7z-compressed=org.kde.ark.desktop
+application/vnd.rar=org.kde.ark.desktop
+application/x-rar=org.kde.ark.desktop
+application/x-tar=org.kde.ark.desktop
+application/x-compressed-tar=org.kde.ark.desktop
+application/x-xz-compressed-tar=org.kde.ark.desktop
+application/x-zstd-compressed-tar=org.kde.ark.desktop
+application/gzip=org.kde.ark.desktop
+
+# Installing apps: Flathub links and files open in Discover
+application/vnd.flatpak.ref=org.kde.discover.desktop
+application/vnd.flatpak.repo=org.kde.discover.desktop
+x-scheme-handler/appstream=org.kde.discover.desktop

@@ -27,6 +27,14 @@ check "automatic updates" systemctl is-enabled omnilaunch-os-update.timer
 check "omnilaunch-os helper" bash -c 'omnilaunch-os help | grep -q rollback'
 check "Flathub in Discover" grep -q "dl.flathub.org" /etc/flatpak/remotes.d/flathub.flatpakrepo
 check "Distrobox (apps from other Linux distros)" rpm -q distrobox
+check "apps install from Flathub on first start" bash -c 'systemctl is-enabled omnilaunch-os-apps.service && grep -q "^org.gimp.GIMP" /usr/share/omnilaunch-os/apps.list'
+check "welcome message at login" test -x /usr/libexec/omnilaunch-os-welcome
+check "default browser" grep -Eq "^x-scheme-handler/https=(org.mozilla.firefox|firefox).desktop" /etc/xdg/kde-mimeapps.list
+check "default apps for documents, PDFs, photos, video" bash -c 'for d in "application/pdf=org.kde.okular" "application/vnd.openxmlformats-officedocument.wordprocessingml.document=org.libreoffice.LibreOffice.writer" "image/jpeg=org.kde.gwenview" "video/mp4=org.videolan.VLC" "image/vnd.adobe.photoshop=org.gimp.GIMP"; do grep -q "^$d.desktop" /etc/xdg/kde-mimeapps.list /etc/xdg/mimeapps.list || exit 1; done'
+check "Windows/Android files still open with OmniLaunch" grep -q "^application/x-ms-dos-executable=omnilaunch.desktop" /etc/xdg/kde-mimeapps.list
+check "Default Apps in the app menu" test -f /usr/share/applications/omnilaunch-os-default-apps.desktop
+check "printers and scanners" rpm -q hplip gutenprint-cups sane-airscan ipp-usb
+check "GPU compute (OpenCL) and Office-compatible fonts" rpm -q mesa-libOpenCL google-carlito-fonts
 check "Waydroid (Android apps)" rpm -q waydroid
 check "Podman (other Linux apps)" rpm -q podman
 
@@ -44,6 +52,7 @@ if [[ $ARCH == x86_64 ]]; then
     check "NVIDIA chosen over nouveau at boot" grep -q "nvidia-drm.modeset=1" /usr/lib/bootc/kargs.d/00-nvidia.toml
     check "no driver rebuilds on a read-only system" bash -c '! rpm -q akmods'
     check "Steam, Gamescope, MangoHud" rpm -q steam gamescope mangohud
+    check "Intel video decoding" rpm -q intel-media-driver
     check "Wine" wine --version
     check "Proton launcher (umu)" command -v umu-run
     check "a Windows app is planned with Wine/Proton" bash -c 'omnilaunch run --dry-run /tmp/app.exe 2>&1 | grep -Ei "wine|proton"'

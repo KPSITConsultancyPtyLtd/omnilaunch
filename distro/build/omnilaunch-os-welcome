@@ -1,0 +1,21 @@
+#!/usr/bin/bash
+# Runs at login: tells the user, once, that their apps are being set up and when they're ready.
+flag=${XDG_STATE_HOME:-$HOME/.local/state}/omnilaunch-os/welcomed
+status=/var/lib/omnilaunch-os/apps-status
+[[ -e $flag || ! -e /run/ostree-booted ]] && exit 0
+mkdir -p "$(dirname "$flag")"
+notify() { notify-send -a "OmniLaunch OS" -i system-software-install "$@" 2>/dev/null || true; }
+
+if [[ $(cat "$status" 2>/dev/null) != done ]]; then
+    notify "Welcome to OmniLaunch OS" \
+        "Your apps (office, photo and video editing, and more) are installing in the background. They'll appear in the app menu over the next few minutes."
+    for _ in $(seq 1 360); do              # up to 3 hours
+        sleep 30
+        [[ $(cat "$status" 2>/dev/null) == done ]] && break
+    done
+    [[ $(cat "$status" 2>/dev/null) == done ]] &&
+        notify "Your apps are ready" "Find more in Discover, the app store. Double-click Windows and Android apps to run them."
+else
+    notify "Welcome to OmniLaunch OS" "Find more apps in Discover. Double-click Windows and Android apps to run them."
+fi
+touch "$flag"

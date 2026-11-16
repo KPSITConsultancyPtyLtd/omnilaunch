@@ -3,6 +3,9 @@
 #   omnilaunch-os status      what's installed and whether an update is waiting
 #   omnilaunch-os update      download the newest OmniLaunch OS now (used on the next restart)
 #   omnilaunch-os rollback    go back to the previous version on the next restart
+#   omnilaunch-os apps        open the app store (Discover) and show app setup progress
+#   omnilaunch-os install X   find and install an app, e.g.  omnilaunch-os install spotify
+#   omnilaunch-os defaults    choose which app opens web links, email, music, videos...
 #   omnilaunch-os enroll-key  let the NVIDIA driver load with Secure Boot on
 set -euo pipefail
 need_root() { if [[ $EUID -ne 0 ]]; then exec sudo "$0" "$@"; fi; }
@@ -19,6 +22,19 @@ case ${1:-status} in
         echo "Checking for a newer OmniLaunch OS..."
         bootc upgrade
         echo "If an update was downloaded, it's used from the next restart. Your files and apps stay."
+        ;;
+    apps)
+        echo "App setup: $(cat /var/lib/omnilaunch-os/apps-status 2>/dev/null || echo 'not started')"
+        (plasma-discover >/dev/null 2>&1 &)
+        ;;
+    install)
+        shift
+        [[ $# -gt 0 ]] || { echo "usage: omnilaunch-os install <app name>" >&2; exit 2; }
+        flatpak install flathub "$@"     # asks which match you mean, then installs it
+        ;;
+    defaults)
+        (systemsettings kcm_componentchooser >/dev/null 2>&1 &)
+        echo "For a particular kind of file: right-click one → Open With → Other Application, and tick 'Remember'."
         ;;
     rollback)
         need_root "$@"
@@ -38,7 +54,7 @@ case ${1:-status} in
         mokutil --import "$cert"
         ;;
     -h|--help|help)
-        sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
         ;;
     *)
         echo "Unknown command: $1 (try: omnilaunch-os help)" >&2; exit 2 ;;

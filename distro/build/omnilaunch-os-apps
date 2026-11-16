@@ -1,0 +1,40 @@
+#!/usr/bin/bash
+# Installs OmniLaunch OS's chosen apps from Flathub, in the background, after the first start (and any
+# new ones a later OmniLaunch OS version adds). Each app is installed once: one the user removes stays
+# removed. Apps that fail (no internet, say) are tried again at the next start.
+set -uo pipefail
+list=/usr/share/omnilaunch-os/apps.list
+state=/var/lib/omnilaunch-os
+installed=$state/apps-installed
+status=$state/apps-status
+arch=$(uname -m)
+mkdir -p "$state"
+touch "$installed"
+
+flatpak remote-add --system --if-not-exists flathub /etc/flatpak/remotes.d/flathub.flatpakrepo 2>/dev/null ||
+    flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+todo=()
+while read -r id archs _; do
+    [[ -z $id || $id == \#* ]] && continue
+    [[ -n $archs && $archs != \#* && ,$archs, != *,$arch,* ]] && continue
+    grep -qxF "$id" "$installed" || todo+=("$id")
+done < "$list"
+
+if ((${#todo[@]} == 0)); then echo done > "$status"; exit 0; fi
+failed=()
+n=0
+for id in "${todo[@]}"; do
+    n=$((n + 1))
+    echo "installing $n of ${#todo[@]}: $id" > "$status"
+    if flatpak install --system --noninteractive --or-update flathub "$id"; then
+        echo "$id" >> "$installed"
+    else
+        failed+=("$id")
+    fi
+done
+if ((${#failed[@]})); then
+    echo "will retry: ${failed[*]}" > "$status"
+    exit 1
+fi
+echo done > "$status"

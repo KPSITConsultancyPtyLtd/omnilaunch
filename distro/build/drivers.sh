@@ -12,14 +12,35 @@ dnf -y install \
     "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${fedora}.noarch.rpm"
 
 log "Hardware video decoding for every codec (H.264, HEVC, AV1)"
-for pair in "mesa-va-drivers mesa-va-drivers-freeworld" "mesa-vdpau-drivers mesa-vdpau-drivers-freeworld"; do
-    set -- $pair
-    if rpm -q "$1" >/dev/null 2>&1; then dnf -y swap "$1" "$2" --allowerasing; else dnf -y install "$2"; fi
-done
-dnf -y install --skip-unavailable libavcodec-freeworld gstreamer1-plugins-bad-freeworld gstreamer1-plugins-ugly
-[[ $ARCH == x86_64 ]] && dnf -y install --skip-unavailable \
-    mesa-va-drivers-freeworld.i686 mesa-vdpau-drivers-freeworld.i686
+if rpm -q mesa-va-drivers >/dev/null 2>&1; then
+    dnf -y swap mesa-va-drivers mesa-va-drivers-freeworld --allowerasing
+else
+    dnf -y install mesa-va-drivers-freeworld
+fi
+# VDPAU is an older interface that newer Mesa dropped; only swap it where it still exists.
+if rpm -q mesa-vdpau-drivers >/dev/null 2>&1 && dnf -q info mesa-vdpau-drivers-freeworld >/dev/null 2>&1; then
+    dnf -y swap mesa-vdpau-drivers mesa-vdpau-drivers-freeworld --allowerasing
+fi
+dnf -y install --skip-unavailable libavcodec-freeworld gstreamer1-plugins-bad-freeworld gstreamer1-plugins-ugly \
+    gstreamer1-plugin-openh264 ffmpegthumbnailer
+if [[ $ARCH == x86_64 ]]; then
+    dnf -y install --skip-unavailable mesa-va-drivers-freeworld.i686 \
+        intel-media-driver libva-intel-driver            # Intel graphics video decoding (new and old)
+fi
 rpm -q mesa-va-drivers-freeworld >/dev/null
+
+log "Printers, scanners, GPU compute, game controllers, fingerprint readers, Office-compatible fonts"
+dnf -y install --skip-unavailable \
+    hplip gutenprint-cups foomatic-db-ppds epson-inkjet-printer-escpr epson-inkjet-printer-escpr2 \
+    brlaser splix c2esp ipp-usb sane-backends-drivers-scanners sane-airscan \
+    mesa-libOpenCL \
+    game-devices-udev steam-devices \
+    fprintd fprintd-pam \
+    google-carlito-fonts google-crosextra-caladea-fonts liberation-fonts \
+    google-noto-sans-cjk-fonts google-noto-emoji-fonts fira-code-fonts jetbrains-mono-fonts
+for p in hplip gutenprint-cups sane-airscan mesa-libOpenCL google-carlito-fonts; do
+    rpm -q "$p" >/dev/null || { echo "Expected $p" >&2; exit 1; }
+done
 
 if [[ $ARCH == x86_64 ]]; then
     shopt -s nullglob
