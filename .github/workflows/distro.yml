@@ -99,14 +99,14 @@ jobs:
 
       - name: Build the live USB image
         run: |
-          sudo TMPDIR="$WORK/tmp" podman build --build-arg IMAGE_REF="$IMAGE:latest" \
+          sudo TMPDIR="$WORK/tmp" podman build --build-arg IMAGE_REF="$IMAGE:latest-${{ matrix.arch }}" \
             -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
           sudo podman image prune -f >/dev/null
           df -h "$WORK"
 
       - name: Make the .iso (titanoboa)
         run: |
-          git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"
+          git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"\n          # TODO: pin this dependency to a reviewed commit SHA before a production release.
           # titanoboa's main.sh. Keep files' real owners (titanoboa makes everything root's, which is wrong for a few files).
           sed -i 's/ -all-root//' "$RUNNER_TEMP/titanoboa/build_iso.sh"
           grep -q -- '-all-root' "$RUNNER_TEMP/titanoboa/build_iso.sh" && { echo "couldn't patch titanoboa"; exit 1; }
@@ -127,7 +127,7 @@ jobs:
           sudo apt-get install -yq squashfs-tools xorriso >/dev/null
           sudo xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" 2>&1 | tail -1
           sudo unsquashfs -cat "$WORK/squashfs.img" usr/share/anaconda/interactive-defaults.ks | tee ks.txt | tail -3
-          grep -q "ostreecontainer --url=$IMAGE:latest" ks.txt
+          grep -q "ostreecontainer --url=$IMAGE:latest-${{ matrix.arch }}" ks.txt
           sudo rm -f "$WORK/squashfs.img"
           size=$(stat -c %s "$ISO"); echo "ISO size: $((size / 1024 / 1024)) MB"
 
