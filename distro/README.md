@@ -117,3 +117,19 @@ The rest:
 - `Containerfile.live` plus `live/` make the live USB system and its installer.
   [Titanoboa](https://github.com/ublue-os/titanoboa) turns them into the `.iso`.
 - `build/check.sh` is what CI verifies in every image before publishing it.
+
+
+### Release security gate (hardening branch)
+
+The ISO build is deliberately disabled unless the repository variable
+`OMNILAUNCH_INSTALL_IMAGE_DIGEST` is set to a reviewed, architecture-matching
+`sha256:<64 hexadecimal characters>` image digest. The installer accepts only
+`ghcr.io/...@sha256:...` references and does not request bypassing signature
+verification. **Digest pinning is not a substitute for publisher identity
+verification.** Configure and test the appropriate bootc/ostree container trust
+policy and signed image publishing before enabling production installations.
+
+This variable currently applies to the whole build matrix; do not enable the
+ISO build for both architectures with a single architecture-specific digest.
+A per-architecture digest resolution step and signed manifest publication are
+still required. Production ISO release remains blocked pending that work.
