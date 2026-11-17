@@ -107,13 +107,17 @@ graphroot = "%s/containers"
           sudo podman logout ghcr.io
 
       - name: Build the live USB image
-        run: |
-          sudo TMPDIR="$WORK/tmp" podman build --build-arg IMAGE_REF="$IMAGE:latest-${{ matrix.arch }}" \
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
+        env:
+          INSTALL_IMAGE_DIGEST: ${{ vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST }}
+        run: |\n          case "$INSTALL_IMAGE_DIGEST" in sha256:*) ;; *) echo "Expected sha256 digest"; exit 1;; esac
+          sudo TMPDIR="$WORK/tmp" podman build --build-arg IMAGE_REF="$IMAGE@$INSTALL_IMAGE_DIGEST" \
             -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
           sudo podman image prune -f >/dev/null
           df -h "$WORK"
 
-      - name: Make the .iso (titanoboa)
+      - name: Validate installer digest is configured\n        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST == ''\n        run: echo "::warning::Skipping ISO: set OMNILAUNCH_INSTALL_IMAGE_DIGEST to a verified, architecture-matching sha256 image digest."\n\n      - name: Make the .iso (titanoboa)
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         run: |
           git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"
           # TODO: pin this dependency to a reviewed commit SHA before a production release.
@@ -133,22 +137,25 @@ graphroot = "%s/containers"
           echo "ISO=$WORK/iso/$name" >> "$GITHUB_ENV"
 
       - name: Check the installer installs OmniLaunch OS from the registry
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         run: |
           sudo apt-get install -yq squashfs-tools xorriso >/dev/null
           sudo xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" 2>&1 | tail -1
           sudo unsquashfs -cat "$WORK/squashfs.img" usr/share/anaconda/interactive-defaults.ks | tee ks.txt | tail -3
-          grep -q "ostreecontainer --url=$IMAGE:latest-${{ matrix.arch }}" ks.txt
+          grep -qF "ostreecontainer --url=$IMAGE@${{ vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST }}" ks.txt\n          ! grep -q -- "--no-signature-verification" ks.txt
           sudo rm -f "$WORK/squashfs.img"
           size=$(stat -c %s "$ISO"); echo "ISO size: $((size / 1024 / 1024)) MB"
 
       - name: Check the .iso has its boot files and live system
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         run: |
           sudo apt-get install -yq xorriso >/dev/null
           xorriso -indev "$ISO" -ls /LiveOS /images/pxeboot /EFI/BOOT 2>&1 | tee files.txt
           grep -q squashfs.img files.txt && grep -q vmlinuz files.txt && grep -q initrd.img files.txt
 
       - name: Boot the .iso in a virtual machine
-        if: matrix.arch == 'x86_64'
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
+        if: matrix.arch == 'x86_64' && vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         timeout-minutes: 20
         run: |
           if [ ! -e /dev/kvm ]; then echo "No KVM on this runner; skipping the boot test"; exit 0; fi
@@ -174,6 +181,7 @@ graphroot = "%s/containers"
           echo "PASS  the live USB boots to OmniLaunch OS"
 
       - uses: actions/upload-artifact@v4
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         with:
           name: OmniLaunch-OS-${{ matrix.arch }}
           path: |
