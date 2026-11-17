@@ -56,10 +56,10 @@ if [[ $ARCH == x86_64 ]]; then
     rpm -q akmods >/dev/null 2>&1 && rpm -e --nodeps akmods
     systemctl enable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null || true
 
-    # Use NVIDIA's driver instead of nouveau, with modesetting (needed for Wayland).
+    # Keep nouveau available as a fallback for unsupported NVIDIA GPUs and Secure Boot\n    # systems that cannot load the proprietary module. Do not blacklist it globally.
     mkdir -p /usr/lib/bootc/kargs.d
     cat > /usr/lib/bootc/kargs.d/00-nvidia.toml <<'EOF'
-kargs = ["rd.driver.blacklist=nouveau", "modprobe.blacklist=nouveau", "nvidia-drm.modeset=1", "nvidia-drm.fbdev=1"]
+kargs = ["nvidia-drm.modeset=1", "nvidia-drm.fbdev=1"]
 match-architectures = ["x86_64"]
 EOF
     cat > /usr/lib/modprobe.d/omnilaunch-nvidia.conf <<'EOF'
