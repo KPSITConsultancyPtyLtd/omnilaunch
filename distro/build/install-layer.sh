@@ -57,7 +57,7 @@ fi
 log "Installing compatibility helpers for $ARCH"
 dnf -y install --skip-unavailable "${wanted[@]}"
 missing=()
-for p in "${wanted[@]}"; do rpm -q "${p%.i686}" >/dev/null 2>&1 || missing+=("$p"); done
+for p in "${wanted[@]}"; do rpm -q "$p" >/dev/null 2>&1 || missing+=("$p"); done
 if ((${#missing[@]})); then echo "Not available on this Fedora (skipped): ${missing[*]}"; fi
 for p in "${required[@]}"; do rpm -q "$p" >/dev/null || { echo "Required package $p is missing" >&2; exit 1; }; done
 
