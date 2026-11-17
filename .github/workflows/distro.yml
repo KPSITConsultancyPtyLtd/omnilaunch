@@ -110,13 +110,18 @@ graphroot = "%s/containers"
         if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         env:
           INSTALL_IMAGE_DIGEST: ${{ vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST }}
-        run: |\n          case "$INSTALL_IMAGE_DIGEST" in sha256:*) ;; *) echo "Expected sha256 digest"; exit 1;; esac
+        run: |
+          [[ "$INSTALL_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Expected a full SHA-256 digest"; exit 1; }
           sudo TMPDIR="$WORK/tmp" podman build --build-arg IMAGE_REF="$IMAGE@$INSTALL_IMAGE_DIGEST" \
             -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
           sudo podman image prune -f >/dev/null
           df -h "$WORK"
 
-      - name: Validate installer digest is configured\n        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST == ''\n        run: echo "::warning::Skipping ISO: set OMNILAUNCH_INSTALL_IMAGE_DIGEST to a verified, architecture-matching sha256 image digest."\n\n      - name: Make the .iso (titanoboa)
+      - name: Validate installer digest is configured
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST == ''
+        run: echo "::warning::Skipping ISO: set OMNILAUNCH_INSTALL_IMAGE_DIGEST to a verified, architecture-matching sha256 image digest."
+
+      - name: Make the .iso (titanoboa)
         if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         run: |
           git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"
@@ -142,7 +147,8 @@ graphroot = "%s/containers"
           sudo apt-get install -yq squashfs-tools xorriso >/dev/null
           sudo xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" 2>&1 | tail -1
           sudo unsquashfs -cat "$WORK/squashfs.img" usr/share/anaconda/interactive-defaults.ks | tee ks.txt | tail -3
-          grep -qF "ostreecontainer --url=$IMAGE@${{ vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST }}" ks.txt\n          ! grep -q -- "--no-signature-verification" ks.txt
+          grep -qF "ostreecontainer --url=$IMAGE@${{ vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST }}" ks.txt
+          ! grep -q -- "--no-signature-verification" ks.txt
           sudo rm -f "$WORK/squashfs.img"
           size=$(stat -c %s "$ISO"); echo "ISO size: $((size / 1024 / 1024)) MB"
 
@@ -154,7 +160,6 @@ graphroot = "%s/containers"
           grep -q squashfs.img files.txt && grep -q vmlinuz files.txt && grep -q initrd.img files.txt
 
       - name: Boot the .iso in a virtual machine
-        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         if: matrix.arch == 'x86_64' && vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         timeout-minutes: 20
         run: |
