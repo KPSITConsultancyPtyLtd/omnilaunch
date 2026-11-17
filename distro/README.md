@@ -34,8 +34,8 @@ set that up, turn Secure Boot off in the PC's firmware settings (everything else
 
 ## Apps, ready to use
 
-After the first start, OmniLaunch OS installs these from Flathub in the background (a notification says
-when they're ready). Each updates itself and can be removed in Discover. An app you remove stays removed.
+After the first start, OmniLaunch OS installs the Everyday apps from Flathub in the background (a notification says
+when they're ready). Each updates itself and can be removed in Discover. An app you remove stays removed.\n\nThe Creative suite and Games Flatpaks are optional to avoid a large first-boot download.\nTo opt into all curated apps, run `echo full | sudo tee /etc/omnilaunch-os/apps-profile`\nand then `sudo systemctl restart omnilaunch-os-apps.service`. This installs the additional\napps; it does not remove anything already installed.
 
 | For | App | Instead of |
 |---|---|---|
@@ -73,7 +73,7 @@ updates them. Windows `.exe` and Android `.apk` files just open with a double-cl
 GitHub builds it: **Actions → distro → the latest run → Artifacts**. There's one `.iso` (about 5–6 GB) per
 CPU type, kept for a day. **Run workflow** builds a fresh one.
 
-Installing downloads OmniLaunch OS from `ghcr.io/kpsitconsultancyptyltd/omnilaunch-os`, so it needs
+Installing downloads the architecture-specific published image from `ghcr.io/kpsitconsultancyptyltd/omnilaunch-os`, so it needs
 internet. The package must be **public**: GitHub → your profile → Packages → omnilaunch-os → Package settings
 → Change visibility. Making it public also makes the OmniLaunch code inside the image visible to anyone.
 
