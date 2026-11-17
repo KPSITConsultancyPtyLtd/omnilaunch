@@ -27,7 +27,7 @@ check "automatic updates" systemctl is-enabled omnilaunch-os-update.timer
 check "omnilaunch-os helper" bash -c 'omnilaunch-os help | grep -q rollback'
 check "Flathub in Discover" grep -q "dl.flathub.org" /etc/flatpak/remotes.d/flathub.flatpakrepo
 check "Distrobox (apps from other Linux distros)" rpm -q distrobox
-check "apps install from Flathub on first start" bash -c 'systemctl is-enabled omnilaunch-os-apps.service && grep -q "^org.gimp.GIMP" /usr/share/omnilaunch-os/apps.list'
+check "first-run app installer syntax" bash -n /usr/libexec/omnilaunch-os-apps\ncheck "apps install from Flathub on first start" bash -c 'systemctl is-enabled omnilaunch-os-apps.service && grep -q "^org.gimp.GIMP" /usr/share/omnilaunch-os/apps.list'
 check "welcome message at login" test -x /usr/libexec/omnilaunch-os-welcome
 check "default browser" grep -Eq "^x-scheme-handler/https=(org.mozilla.firefox|firefox).desktop" /etc/xdg/kde-mimeapps.list
 check "default apps for documents, PDFs, photos, video" bash -c 'for d in "application/pdf=org.kde.okular" "application/vnd.openxmlformats-officedocument.wordprocessingml.document=org.libreoffice.LibreOffice.writer" "image/jpeg=org.kde.gwenview" "video/mp4=org.videolan.VLC" "image/vnd.adobe.photoshop=org.gimp.GIMP"; do grep -q "^$d.desktop" /etc/xdg/kde-mimeapps.list /etc/xdg/mimeapps.list || exit 1; done'
