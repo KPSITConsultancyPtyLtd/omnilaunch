@@ -16,6 +16,7 @@ flatpak remote-add --system --if-not-exists flathub /etc/flatpak/remotes.d/flath
 
 todo=()
 while read -r id archs _; do\n    if [[ $id == \#* ]]; then\n        case "$id" in\n            *"Creative suite"*|*"Games"*) section=optional ;;\n            *"Looking after apps"*) section=essential ;;\n        esac\n        continue\n    fi\n    [[ $profile == essential && $section == optional ]] && continue
+    read -r id archs _ <<< "$line"
     [[ -z $id || $id == \#* ]] && continue
     [[ -n $archs && $archs != \#* && ,$archs, != *,$arch,* ]] && continue
     grep -qxF "$id" "$installed" || todo+=("$id")
