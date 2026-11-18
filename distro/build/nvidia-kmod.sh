@@ -12,9 +12,7 @@ if [[ $(uname -m) != x86_64 ]]; then echo "NVIDIA desktop drivers: x86_64 only, 
 KVER=$(cat /usr/lib/modules/.omnilaunch-kernel)
 fedora=$(rpm -E %fedora)
 
-dnf -y install \
-    "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${fedora}.noarch.rpm" \
-    "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${fedora}.noarch.rpm"
+bash "$(dirname "$(realpath "$0")")/rpmfusion.sh"
 echo "%_with_kmod_nvidia_open 1" > /etc/rpm/macros.nvidia-kmod
 dnf -y install "kernel-devel-${KVER}" akmods elfutils-libelf-devel cpio
 # akmod-nvidia's install script tries to build the driver as root, which akmods refuses (and dnf treats

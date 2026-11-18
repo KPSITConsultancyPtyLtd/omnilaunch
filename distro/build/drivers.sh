@@ -6,10 +6,8 @@ ARCH=$(uname -m)
 fedora=$(rpm -E %fedora)
 log() { printf '\n==> %s\n' "$*"; }
 
-log "Enabling RPM Fusion (full video codecs, NVIDIA)"
-dnf -y install \
-    "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${fedora}.noarch.rpm" \
-    "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-${fedora}.noarch.rpm"
+log "Enabling RPM Fusion (full video codecs, NVIDIA), signatures checked"
+bash "$(dirname "$(realpath "$0")")/rpmfusion.sh"
 
 log "Hardware video decoding for every codec (H.264, HEVC, AV1)"
 if rpm -q mesa-va-drivers >/dev/null 2>&1; then

@@ -152,18 +152,24 @@ def _fetch_once(url: str, dest: str | None = None) -> bytes:
     """Download with curl when available (it uses the system's certificates), else urllib."""
     curl = shutil.which("curl")
     headers = ["User-Agent: omnilaunch"]
+    secret_headers = []
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token and url.startswith("https://api.github.com/"):
-        headers.append(f"Authorization: Bearer {token}")   # avoids GitHub's low anonymous rate limit
+        secret_headers.append(f"Authorization: Bearer {token}")   # avoids GitHub's low anonymous rate limit
     if curl:
-        argv = [curl, "-fsSL"]
+        argv = [curl, "-fsSL", "--proto", "=https", "--tlsv1.2"]
         for h in headers:
             argv += ["-H", h]
+        # The token goes in through stdin, not the command line, where other users could see it.
+        stdin = ("\n".join(secret_headers) + "\n").encode() if secret_headers else None
+        if stdin:
+            argv += ["-H", "@-"]
         argv.append(url)
         if dest:
-            subprocess.run([*argv, "-o", dest], check=True)
+            subprocess.run([*argv, "-o", dest], check=True, input=stdin)
             return b""
-        return subprocess.run(argv, check=True, capture_output=True).stdout
+        return subprocess.run(argv, check=True, capture_output=True, input=stdin).stdout
+    headers += secret_headers
     req = urllib.request.Request(url, headers=dict(h.split(": ", 1) for h in headers))
     with urllib.request.urlopen(req, timeout=120) as r:
         data = r.read()
@@ -201,7 +207,11 @@ def asset_sha256(releases: list[dict], patterns: list[str]) -> str | None:
 
 
 def sha256_file(path: str) -> str:
-    h = hashlib.sha256()
+    return _hash_file(path, "sha256")
+
+
+def _hash_file(path: str, algorithm: str) -> str:
+    h = hashlib.new(algorithm)
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
@@ -366,16 +376,25 @@ def _install_android(inst: Installer) -> None:
         return
     tmp = tempfile.mkdtemp(prefix="omnilaunch-android-")
     try:
-        emulator_url = android.pick_emulator_url(_fetch(android.REPO_INDEX))
-        api, image_url = android.pick_system_image(_fetch(android.SYSIMG_INDEX), abi)
-        for label, url, dest in (
-                ("platform tools", android.platform_tools_url(), sdk),
-                ("emulator", emulator_url, sdk),
-                (f"Android {api} system image", image_url,
+        repo_index, image_index = _fetch(android.REPO_INDEX), _fetch(android.SYSIMG_INDEX)
+        emulator_url = android.pick_emulator_url(repo_index)
+        tools_url = android.pick_platform_tools_url(repo_index)
+        api, image_url = android.pick_system_image(image_index, abi)
+        for label, url, index, dest in (
+                ("platform tools", tools_url, repo_index, sdk),
+                ("emulator", emulator_url, repo_index, sdk),
+                (f"Android {api} system image", image_url, image_index,
                  os.path.join(sdk, "system-images", f"android-{api}", "google_apis"))):
             archive = os.path.join(tmp, os.path.basename(url))
             inst.log(f"downloading {label} ...")
             _fetch(url, archive)
+            expected = android.archive_sha1(index, url)
+            if expected is None:
+                raise SetupError(f"Google's index lists no checksum for the {label}, so it can't be verified.")
+            actual = _hash_file(archive, "sha1")
+            if actual != expected:
+                raise SetupError(f"The {label} download didn't match Google's published checksum "
+                                 f"(expected {expected}, got {actual}). It may be damaged or tampered with.")
             _unzip(inst, archive, dest)
         android.write_avd(api, abi)
         inst.log(f"created the '{android.AVD_NAME}' virtual device (Android {api})")

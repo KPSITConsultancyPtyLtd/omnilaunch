@@ -14,6 +14,7 @@ IMAGE=false
 if [[ ${1:-} == --image ]]; then IMAGE=true; shift; fi
 SRC=$(realpath "${1:?usage: install-layer.sh [--image] <omnilaunch source folder>}")
 ARCH=$(uname -m)
+OMNILAUNCH_IMAGE=${OMNILAUNCH_IMAGE:-ghcr.io/kpsitconsultancyptyltd/omnilaunch-os}
 . /etc/os-release
 log() { printf '\n==> %s\n' "$*"; }
 
@@ -61,11 +62,9 @@ case $ARCH in
     *) echo "OmniLaunch OS supports x86_64 and aarch64, not $ARCH" >&2; exit 1 ;;
 esac
 
-if [[ $ARCH == x86_64 ]] && ! rpm -q rpmfusion-nonfree-release >/dev/null 2>&1; then
-    log "Enabling RPM Fusion (Steam)"
-    dnf -y install \
-        "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
-        "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
+if [[ $ARCH == x86_64 ]]; then
+    log "Enabling RPM Fusion (Steam), signatures checked"
+    bash "$SRC/distro/build/rpmfusion.sh"
 fi
 
 log "Installing compatibility helpers for $ARCH"
@@ -204,6 +203,8 @@ RestartSec=10min
 TimeoutStartSec=3h
 Nice=10
 IOSchedulingClass=idle
+ProtectHome=yes
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
@@ -238,6 +239,101 @@ Icon=preferences-desktop-filetype-association
 Categories=Settings;
 Keywords=file type;association;open with;default;
 EOF
+
+    log "Security: signed updates (if a signing key is set up), firewall, automatic app updates"
+    if [[ -f $SRC/distro/signing/cosign.pub ]]; then
+        install -D -m 0644 "$SRC/distro/signing/cosign.pub" /etc/pki/containers/omnilaunch-os.pub
+        mkdir -p /etc/containers/registries.d
+        cat > /etc/containers/registries.d/omnilaunch-os.yaml <<EOF
+docker:
+  ${OMNILAUNCH_IMAGE}:
+    use-sigstore-attachments: true
+EOF
+        # Accept images from OmniLaunch OS's registry only if signed with its key.
+        OMNILAUNCH_IMAGE="$OMNILAUNCH_IMAGE" python3 - <<'EOF'
+import json, os
+path = "/etc/containers/policy.json"
+with open(path) as f:
+    policy = json.load(f)
+policy.setdefault("transports", {}).setdefault("docker", {})[os.environ["OMNILAUNCH_IMAGE"]] = [{
+    "type": "sigstoreSigned",
+    "keyPath": "/etc/pki/containers/omnilaunch-os.pub",
+    "signedIdentity": {"type": "matchRepository"},
+}]
+with open(path, "w") as f:
+    json.dump(policy, f, indent=2)
+EOF
+        install -m 0755 "$SRC/distro/build/omnilaunch-os-verify-updates" /usr/libexec/omnilaunch-os-verify-updates
+        cat > /usr/lib/systemd/system/omnilaunch-os-verify-updates.service <<'EOF'
+[Unit]
+Description=Accept only signed OmniLaunch OS updates from now on
+ConditionPathExists=/run/ostree-booted
+ConditionPathExists=!/var/lib/omnilaunch-os/updates-verified
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/omnilaunch-os-verify-updates
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl enable omnilaunch-os-verify-updates.service
+    else
+        echo "No distro/signing/cosign.pub: images aren't signed yet (see distro/make-signing-key.sh)"
+    fi
+
+    # Firewall: nothing on this computer is reachable from the network except what's listed (Fedora's
+    # desktop default opens every port from 1025 up).
+    cat > /etc/firewalld/zones/omnilaunch.xml <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>OmniLaunch OS</short>
+  <description>Incoming connections are refused, except: finding printers and devices on the network,
+  file sharing you start, KDE Connect (phones), LocalSend (nearby file sending) and Steam Remote Play.</description>
+  <service name="dhcpv6-client"/>
+  <service name="mdns"/>
+  <service name="samba-client"/>
+  <service name="kdeconnect"/>
+  <service name="steam-streaming"/>
+  <port protocol="tcp" port="53317"/>
+  <port protocol="udp" port="53317"/>
+</zone>
+EOF
+    sed -i 's/^DefaultZone=.*/DefaultZone=omnilaunch/' /etc/firewalld/firewalld.conf
+    grep -q '^DefaultZone=omnilaunch' /etc/firewalld/firewalld.conf || echo 'DefaultZone=omnilaunch' >> /etc/firewalld/firewalld.conf
+    systemctl enable firewalld.service
+
+    # Security fixes for apps: Flathub apps update every day, not only when someone opens Discover.
+    cat > /usr/lib/systemd/system/omnilaunch-os-app-updates.service <<'EOF'
+[Unit]
+Description=Update Flathub apps
+ConditionPathExists=/run/ostree-booted
+After=network-online.target omnilaunch-os-apps.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flatpak update --system --noninteractive --assumeyes
+ExecStart=/usr/bin/flatpak uninstall --system --unused --noninteractive --assumeyes
+Nice=10
+IOSchedulingClass=idle
+ProtectHome=yes
+PrivateTmp=yes
+EOF
+    cat > /usr/lib/systemd/system/omnilaunch-os-app-updates.timer <<'EOF'
+[Unit]
+Description=Update Flathub apps every day
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=1d
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl enable omnilaunch-os-app-updates.timer
 
     # Waydroid's Android container should be ready to start whenever an .apk is opened.
     systemctl enable waydroid-container.service 2>/dev/null || true

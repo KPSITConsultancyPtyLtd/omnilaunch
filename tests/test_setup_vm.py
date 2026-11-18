@@ -164,13 +164,20 @@ class GuiTests(TmpCase):
         self.assertIn(runners.LINUX_GUI_IMAGE, lp.argv)
         self.assertEqual(lp.pre[0], (runners.ensure_xquartz_network, False))
         self.assertEqual(lp.pre[1], (["/usr/bin/open", "-a", "XQuartz"], False))
+        # windows are allowed by a private access cookie, not by opening XQuartz to all local clients
+        self.assertIn(f"XAUTHORITY={runners.XAUTH_IN_CONTAINER}", lp.argv)
+        self.assertIn(f"{runners.x11_cookie_path()}:{runners.XAUTH_IN_CONTAINER}:ro", lp.argv)
+        self.assertFalse(any(isinstance(step[0], list) and "xhost" in step[0][0] for step in lp.pre))
 
     def test_linux_container_gui_mounts_x11_socket(self):
         self.with_tools("docker", "xhost")
         with mock.patch.object(runners, "linux_gui_image_ready", return_value=False):
             lp = runners.plan(detect(self.gui_app()), runner="container")
-        self.assertIn("/tmp/.X11-unix:/tmp/.X11-unix", lp.argv)
-        self.assertEqual(lp.pre, [(["xhost", "+local:"], False)])
+        self.assertIn("/tmp/.X11-unix:/tmp/.X11-unix:ro", lp.argv)
+        rules = [step[0][1] for step in lp.pre]
+        self.assertNotIn("+local:", rules)                     # not every local program and user
+        self.assertIn("+SI:localuser:root", rules)
+        self.assertTrue(all(r.startswith("+SI:localuser:") for r in rules))
 
 
 class VMTests(TmpCase):

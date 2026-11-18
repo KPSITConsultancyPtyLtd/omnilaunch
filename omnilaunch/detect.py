@@ -99,6 +99,7 @@ def detect(path: str) -> AppInfo:
     return AppInfo(path, path, Platform.UNKNOWN, kind="unrecognised format")
 
 
+MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 ANDROID_ABIS = {"arm64-v8a": "arm64", "armeabi-v7a": "arm", "armeabi": "arm", "x86_64": "x86_64", "x86": "x86"}
 
 
@@ -110,8 +111,14 @@ def _android(path: str, lower: str) -> AppInfo | None:
                 if lower.endswith((".xapk", ".apks", ".aab")):
                     return AppInfo(path, path, Platform.ANDROID, kind=f"{lower.rsplit('.', 1)[1].upper()} bundle")
                 return None
-            manifest = z.read("AndroidManifest.xml")
-    except (zipfile.BadZipFile, OSError, KeyError):
+            # A compressed manifest can claim to expand to gigabytes (a "zip bomb"); real ones are small.
+            if z.getinfo("AndroidManifest.xml").file_size > MAX_MANIFEST_BYTES:
+                return AppInfo(path, path, Platform.ANDROID, kind="APK")
+            with z.open("AndroidManifest.xml") as f:
+                manifest = f.read(MAX_MANIFEST_BYTES + 1)
+            if len(manifest) > MAX_MANIFEST_BYTES:
+                return AppInfo(path, path, Platform.ANDROID, kind="APK")
+    except (zipfile.BadZipFile, OSError, KeyError, RuntimeError, NotImplementedError):
         return None
     abis = sorted({ANDROID_ABIS[n.split("/")[1]] for n in names
                    if n.startswith("lib/") and n.count("/") >= 2 and n.split("/")[1] in ANDROID_ABIS})
@@ -153,6 +160,8 @@ def axml_manifest_package(data: bytes) -> str:
 def _axml_strings(data: bytes, chunk: int) -> list[str]:
     header_size = struct.unpack_from("<H", data, chunk + 2)[0]
     count, _styles, flags, strings_start = struct.unpack_from("<IIII", data, chunk + 8)
+    if count > len(data) // 4:
+        raise ValueError("string pool larger than the file")
     utf8 = bool(flags & 0x100)
     offsets = struct.unpack_from(f"<{count}I", data, chunk + header_size)
     base = chunk + strings_start

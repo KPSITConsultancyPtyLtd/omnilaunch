@@ -36,6 +36,15 @@ check "Windows/Android files still open with OmniLaunch" grep -q "^application/x
 check "Default Apps in the app menu" test -f /usr/share/applications/omnilaunch-os-default-apps.desktop
 check "printers and scanners" rpm -q hplip gutenprint-cups sane-airscan ipp-usb
 check "GPU compute (OpenCL) and Office-compatible fonts" rpm -q mesa-libOpenCL google-carlito-fonts
+check "firewall on, refusing incoming connections by default" bash -c 'systemctl is-enabled firewalld.service && grep -q "^DefaultZone=omnilaunch" /etc/firewalld/firewalld.conf && ! grep -q "port=\"1025-65535\"" /etc/firewalld/zones/omnilaunch.xml'
+check "Flathub apps get security updates daily" systemctl is-enabled omnilaunch-os-app-updates.timer
+check "app services run without access to home folders" grep -q "^ProtectHome=yes" /usr/lib/systemd/system/omnilaunch-os-apps.service
+if [[ -f /etc/pki/containers/omnilaunch-os.pub ]]; then
+    check "updates must be signed with OmniLaunch OS's key" bash -c 'grep -q sigstoreSigned /etc/containers/policy.json && systemctl is-enabled omnilaunch-os-verify-updates.service'
+fi
+if rpm -q rpmfusion-free-release >/dev/null 2>&1; then
+    check "RPM Fusion packages are signature-checked" grep -q "^gpgcheck=1" /etc/yum.repos.d/rpmfusion-free.repo /etc/yum.repos.d/rpmfusion-nonfree.repo
+fi
 check "Waydroid (Android apps)" rpm -q waydroid
 check "Podman (other Linux apps)" rpm -q podman
 

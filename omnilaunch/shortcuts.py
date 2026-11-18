@@ -93,8 +93,10 @@ def _read_cstr(data: bytes, pos: int) -> str:
 
 def _read_wstr(data: bytes, pos: int) -> str:
     end = pos
-    while data[end:end + 2] != b"\0\0":
+    while end + 2 <= len(data) and data[end:end + 2] != b"\0\0":
         end += 2
+    if end + 2 > len(data):
+        raise ValueError("unterminated text in shortcut")
     return data[pos:end].decode("utf-16-le", errors="replace")
 
 
@@ -188,7 +190,14 @@ def _put_on_desktop(launcher: str, name: str) -> str | None:
         return None
 
 
+def _clean(text: str) -> str:
+    """Shortcut text comes from Windows installers, so it isn't trusted: drop control characters
+    (a line break in a name could add lines to a launcher file)."""
+    return "".join(c for c in text if c >= " " and c != "\x7f")
+
+
 def create_launcher(name: str, env_name: str, target: str, args: str = "", desktop: bool = True) -> str:
+    name, target, args = _clean(name).strip() or "App", _clean(target), _clean(args)
     argv = [*_launcher_parts(), "run", "--gui", "--env", env_name, target]
     extra = shlex.split(args, posix=False) if args else []
     if runners.HOST_OS == "macos":

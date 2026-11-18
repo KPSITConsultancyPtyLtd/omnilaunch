@@ -10,7 +10,7 @@ RUN bash /tmp/kernel.sh && rm /tmp/kernel.sh
 
 # 2. NVIDIA's open driver, built for exactly that kernel in a throwaway stage (x86_64 only).
 FROM base AS nvidia
-COPY distro/build/nvidia-kmod.sh /tmp/nvidia-kmod.sh
+COPY distro/build/nvidia-kmod.sh distro/build/rpmfusion.sh /tmp/
 RUN --mount=type=secret,id=mok_key --mount=type=secret,id=mok_cert bash /tmp/nvidia-kmod.sh
 
 # 3. OmniLaunch OS.

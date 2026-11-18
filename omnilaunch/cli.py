@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 
-from . import __version__, desktop, envs, provision, runners, vms
+from . import __version__, desktop, envs, provision, runners, trust, vms
 from .detect import detect
 from .runners import RUNNERS, UnsupportedApp, plan, which
 
@@ -97,6 +97,11 @@ def main(argv: list[str] | None = None) -> int:
         argv, passthrough = argv[:cut], argv[cut + 1:]
 
     ns = p.parse_args(argv)
+    if ns.cmd not in (None, "info", "doctor"):
+        try:
+            runners.ensure_private_data_dir()      # app environments hold personal data
+        except OSError:
+            pass
     if ns.cmd == "info":
         return _info(ns.app)
     if ns.cmd == "run":
@@ -220,6 +225,9 @@ def _run(ns: argparse.Namespace) -> int:
         print(_quote(lp.argv))
         return 0
 
+    if not trust.confirm_open(info.path, gui):
+        print(f"[omnilaunch] not opened: {info.path} came from the internet and wasn't approved", file=sys.stderr)
+        return 1
     if lp.prefix:
         envs.record_launch(lp.prefix, info.path)
     for step, required in lp.pre:

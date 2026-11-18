@@ -67,6 +67,20 @@ def data_dir() -> str:
     return os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "omnilaunch")
 
 
+def ensure_private_data_dir() -> str:
+    """OmniLaunch's folder holds every app environment and its data (documents, saved logins), so only
+    this user may open it. Creates it private, and tightens an existing one."""
+    path = data_dir()
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    if HOST_OS != "windows":                     # Windows user folders are private already
+        try:
+            if os.stat(path).st_mode & 0o077:
+                os.chmod(path, 0o700)
+        except OSError:
+            pass
+    return path
+
+
 class UnsupportedApp(Exception):
     """Raised with a human-friendly explanation and a fix, when we can't run something."""
 
@@ -172,11 +186,24 @@ def xquartz_allows_network() -> bool:
     return out in ("0", "false")
 
 
+def xquartz_requires_auth() -> bool:
+    """XQuartz's 'Authenticate connections' (on unless someone turned it off). With network clients
+    allowed, turning it off would let anyone who can reach this Mac draw on and read its X windows."""
+    try:
+        out = subprocess.run(["/usr/bin/defaults", "read", "org.xquartz.X11", "no_auth"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return out not in ("1", "true")
+
+
 def ensure_xquartz_network() -> bool:
-    """let XQuartz show windows from the Linux VM"""
-    if xquartz_allows_network():
+    """let XQuartz show windows from the Linux VM (network clients allowed, authentication required)"""
+    if xquartz_allows_network() and xquartz_requires_auth():
         return True
     subprocess.run(["/usr/bin/defaults", "write", "org.xquartz.X11", "nolisten_tcp", "-bool", "false"],
+                   capture_output=True, check=False)
+    subprocess.run(["/usr/bin/defaults", "write", "org.xquartz.X11", "no_auth", "-bool", "false"],
                    capture_output=True, check=False)
     # The setting applies when XQuartz starts, so restart it if it's running (the next step opens it).
     subprocess.run(["/usr/bin/osascript", "-e", 'if application "XQuartz" is running then quit application "XQuartz"'],
@@ -184,6 +211,78 @@ def ensure_xquartz_network() -> bool:
     import time
     time.sleep(2)
     return True
+
+
+XAUTH_IN_CONTAINER = "/tmp/.omnilaunch-xauth"
+
+
+def x11_cookie_path() -> str:
+    return os.path.join(data_dir(), "x11", "xauthority")
+
+
+def write_x11_cookie(display: str | None = None) -> bool:
+    """Copy the X server's access cookie, usable from any address, into a file only for containers.
+    Containers then prove they may draw windows instead of the server letting every local client in.
+    Returns False if there's no cookie to copy (the caller then falls back to a narrower xhost rule)."""
+    path = x11_cookie_path()
+    folder = os.path.dirname(path)
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    os.chmod(folder, 0o700)                      # other users of this computer can't reach the cookie
+    xauth = "/opt/X11/bin/xauth" if os.path.exists("/opt/X11/bin/xauth") else which("xauth")
+    cookies = []
+    if xauth:
+        try:
+            argv = [xauth, "nlist"] + ([display] if display else [])
+            out = subprocess.run(argv, capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        magic = "MIT-MAGIC-COOKIE-1".encode().hex()
+        # nlist lines start with a 4-digit address family; ffff means "any address".
+        cookies = ["ffff" + line[4:] for line in out.splitlines() if magic in line.lower()]
+    with open(path, "w"):                        # always exists, because containers mount it
+        pass
+    os.chmod(path, 0o644)                        # readable inside the container; its folder is private
+    if not cookies:
+        return False
+    try:
+        r = subprocess.run([xauth, "-f", path, "nmerge", "-"], input="\n".join(cookies) + "\n",
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and os.path.getsize(path) > 0
+
+
+def _mac_container_x11(engine: str) -> tuple[list, list]:
+    """Container arguments and pre-launch steps for showing windows through XQuartz."""
+    host = "host.containers.internal" if os.path.basename(engine).startswith("podman") else "host.docker.internal"
+
+    def grant_access() -> bool:
+        """give the app a private copy of XQuartz's access cookie"""
+        if write_x11_cookie():
+            return True
+        # No cookie (unusual): allow only connections from this Mac itself.
+        xhost = "/opt/X11/bin/xhost" if os.path.exists("/opt/X11/bin/xhost") else "xhost"
+        for rule in ("+localhost", "+127.0.0.1"):
+            subprocess.run([xhost, rule], capture_output=True, check=False)
+        return True
+
+    pre = [(ensure_xquartz_network, False), (["/usr/bin/open", "-a", "XQuartz"], False), (grant_access, False)]
+    args = ["-e", f"DISPLAY={host}:0", "-e", f"XAUTHORITY={XAUTH_IN_CONTAINER}",
+            "-v", f"{x11_cookie_path()}:{XAUTH_IN_CONTAINER}:ro"]
+    return args, pre
+
+
+def _linux_container_x11() -> tuple[list, list]:
+    """Container arguments and pre-launch steps for showing windows on this Linux desktop."""
+    display = os.environ.get("DISPLAY", ":0")
+    pre = []
+    if which("xhost"):
+        # Only this user (rootless Podman runs containers as them) and root (Docker), rather than
+        # every local program and user.
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        rules = ([f"+SI:localuser:{user}"] if user and user != "root" else []) + ["+SI:localuser:root"]
+        pre = [(["xhost", rule], False) for rule in rules]
+    return ["-e", f"DISPLAY={display}", "-v", "/tmp/.X11-unix:/tmp/.X11-unix:ro"], pre
 
 
 def linux_gui_image_ready() -> bool:
@@ -469,15 +568,11 @@ def _container_display(engine: str):
         if image != LINUX_GUI_IMAGE:
             raise UnsupportedApp("Graphical Linux apps need OmniLaunch's Linux GUI image, which isn't built yet.",
                                  "Run: omnilaunch setup linux-gui", needs="linux-gui")
-        host = "host.containers.internal" if os.path.basename(engine).startswith("podman") else "host.docker.internal"
-        xhost = "/opt/X11/bin/xhost" if os.path.exists("/opt/X11/bin/xhost") else "xhost"
-        pre = [(ensure_xquartz_network, False), (["/usr/bin/open", "-a", "XQuartz"], False),
-               ([xhost, "+localhost"], False), ([xhost, "+127.0.0.1"], False)]
-        return ["-e", f"DISPLAY={host}:0"], image, pre
+        args, pre = _mac_container_x11(engine)
+        return args, image, pre
     if HOST_OS == "linux":
-        display = os.environ.get("DISPLAY", ":0")
-        pre = [(["xhost", "+local:"], False)] if which("xhost") else []   # let local containers draw windows
-        return ["-e", f"DISPLAY={display}", "-v", "/tmp/.X11-unix:/tmp/.X11-unix"], image, pre
+        args, pre = _linux_container_x11()
+        return args, image, pre
     raise UnsupportedApp("Graphical Linux apps on Windows run through WSL, not a container.", "Use --runner wsl.")
 
 
@@ -793,13 +888,11 @@ def _box64(info: AppInfo, args: list, verbose: bool, env_name: str | None) -> La
         if not xquartz_installed():
             raise UnsupportedApp("Windows apps need XQuartz to show their windows when running without Rosetta.",
                                  "Run: omnilaunch setup box64", needs="box64")
-        host = "host.containers.internal" if os.path.basename(engine).startswith("podman") else "host.docker.internal"
-        xhost = "/opt/X11/bin/xhost" if os.path.exists("/opt/X11/bin/xhost") else "xhost"
-        pre = [(ensure_xquartz_network, False), (["/usr/bin/open", "-a", "XQuartz"], False),
-               ([xhost, "+localhost"], False), ([xhost, "+127.0.0.1"], False)]
-        argv += ["-e", f"DISPLAY={host}:0"]
+        x11_args, pre = _mac_container_x11(engine)
+        argv += x11_args
     elif os.environ.get("DISPLAY"):
-        argv += ["-e", f"DISPLAY={os.environ['DISPLAY']}", "-v", "/tmp/.X11-unix:/tmp/.X11-unix"]
+        x11_args, pre = _linux_container_x11()
+        argv += x11_args
     ext = os.path.splitext(info.executable.lower())[1]
     special = {".msi": ["msiexec", "/i"], ".bat": ["cmd", "/c"], ".cmd": ["cmd", "/c"], ".lnk": ["start", "/unix"]}
     # Wait for every Windows process in the environment (installers often hand off to a child and exit).

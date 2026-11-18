@@ -129,9 +129,54 @@ class XQuartzTests(TmpCase):
         self.assertTrue(any("quit application" in " ".join(c) for c in calls))
 
     def test_leaves_xquartz_alone_when_already_on(self):
+        # network clients allowed (nolisten_tcp 0) and authentication on (no_auth 0): nothing to change
         with mock.patch.object(runners.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="0\n")) as run:
             self.assertTrue(runners.ensure_xquartz_network())
-        self.assertEqual(run.call_count, 1)
+        self.assertTrue(all(c.args[0][1] == "read" for c in run.call_args_list))
+
+    def test_turns_authentication_back_on(self):
+        """Network clients with authentication off would let anyone on the network use the display."""
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            value = "1\n" if argv[-1] == "no_auth" else "0\n"      # network on, auth OFF
+            return mock.Mock(returncode=0, stdout=value)
+        with mock.patch.object(runners.subprocess, "run", side_effect=fake_run), mock.patch("time.sleep"):
+            self.assertTrue(runners.ensure_xquartz_network())
+        self.assertIn(["/usr/bin/defaults", "write", "org.xquartz.X11", "no_auth", "-bool", "false"], calls)
+
+
+class X11CookieTests(TmpCase):
+    def test_cookie_is_copied_for_any_address_into_a_private_folder(self):
+        nlist = ("0100 0009 6c6f63616c686f7374 0001 30 0012 4d49542d4d414749432d434f4f4b49452d31 0010 "
+                 "00112233445566778899aabbccddeeff\n")
+        merged = []
+
+        def fake_run(argv, **kw):
+            if argv[1] == "nlist":
+                return mock.Mock(returncode=0, stdout=nlist)
+            merged.append(kw.get("input"))
+            with open(argv[2], "w") as f:
+                f.write("cookie")
+            return mock.Mock(returncode=0)
+        with mock.patch.object(runners, "data_dir", return_value=self.d), \
+                mock.patch.object(runners, "which", return_value="/usr/bin/xauth"), \
+                mock.patch.object(runners.os.path, "exists", side_effect=lambda p: False if p == "/opt/X11/bin/xauth" else os.path.lexists(p)), \
+                mock.patch.object(runners.subprocess, "run", side_effect=fake_run):
+            self.assertTrue(runners.write_x11_cookie())
+            folder = os.path.dirname(runners.x11_cookie_path())
+        self.assertTrue(merged[0].startswith("ffff 0009"))           # any address, same cookie
+        if os.name != "nt":
+            self.assertEqual(os.stat(folder).st_mode & 0o777, 0o700)
+
+    def test_no_cookie_reports_false(self):
+        with mock.patch.object(runners, "data_dir", return_value=self.d), \
+                mock.patch.object(runners, "which", return_value=None), \
+                mock.patch.object(runners.os.path, "exists", side_effect=lambda p: False if p == "/opt/X11/bin/xauth" else os.path.lexists(p)):
+            self.assertFalse(runners.write_x11_cookie())
+            path = runners.x11_cookie_path()
+        self.assertTrue(os.path.exists(path))                        # still there for the container mount
 
 
 class FirstLaunchTests(TmpCase):

@@ -149,6 +149,23 @@ next action or launch starts faster.
   not apps that need fast 3D.
 - **Mac apps on Linux** are limited to command-line tools (Darling).
 
+## Security
+
+- **Downloaded apps:** double-clicking a Windows, Android or Linux app downloaded from the internet asks
+  first, the way macOS and Windows ask about their own apps. Your answer is remembered, and a changed
+  file is asked about again. Running one from the terminal doesn't ask.
+- **Windows apps can reach your files.** Wine runs them like normally installed apps, not in a sandbox.
+  Only open apps you trust.
+- **Linux app windows on a Mac:** they reach XQuartz with a private copy of its access key, instead of
+  XQuartz being opened to every program. OmniLaunch keeps XQuartz's "Authenticate connections" setting on.
+  On Linux, only your own user (and root, for Docker) may connect.
+- **Your app environments are private:** OmniLaunch's folder can be opened only by your user.
+- **Helpers it downloads are checked:** Wine, umu-launcher and XQuartz against the SHA-256 GitHub
+  publishes for them, the Android SDK against Google's checksums. Your GitHub token is never put on a
+  command line.
+- **Crafted files:** broken or malicious shortcuts, icons and APKs are rejected rather than hanging or
+  using up memory.
+
 ## Tests
 
 ```bash

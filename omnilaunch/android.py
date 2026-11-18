@@ -124,6 +124,36 @@ def pick_system_image(index_xml: bytes, abi: str) -> tuple[int, str]:
     return api, found[api]
 
 
+def archive_sha1(index_xml: bytes, url: str) -> str | None:
+    """The SHA-1 checksum Google's index lists for the archive at url, or None if it lists none."""
+    name = url.rsplit("/", 1)[-1]
+    root = ET.fromstring(index_xml)
+    for archive in _iter(root, "archive"):
+        url_el = next(_iter(archive, "url"), None)
+        if url_el is None or (url_el.text or "").rsplit("/", 1)[-1] != name:
+            continue
+        for checksum in _iter(archive, "checksum"):
+            value = (checksum.text or "").strip().lower()
+            if checksum.get("type", "sha1") == "sha1" and len(value) == 40:
+                return value
+    return None
+
+
+def pick_platform_tools_url(index_xml: bytes) -> str:
+    """Platform tools for this computer from Google's index (so the download has a checksum)."""
+    root = ET.fromstring(index_xml)
+    for pkg in _iter(root, "remotePackage"):
+        if pkg.get("path") != "platform-tools" or not _stable(pkg):
+            continue
+        for archive in _iter(pkg, "archive"):
+            os_el = _find(archive, "host-os")
+            if os_el is not None and os_el.text != host_os_name():
+                continue
+            url = next(_iter(archive, "url")).text
+            return url if url.startswith("http") else REPO + url
+    return platform_tools_url()
+
+
 def platform_tools_url() -> str:
     name = {"macos": "darwin", "windows": "windows"}.get(runners.HOST_OS, "linux")
     return REPO + "platform-tools-latest-" + name + ".zip"

@@ -122,21 +122,43 @@ The rest:
 
 ## Security
 
-What's checked today:
+**What's protected:**
 
-- Wine and umu-launcher, downloaded from their GitHub releases, must match the SHA-256 GitHub publishes
-  for each file, or the build stops. Everything else comes from Fedora's and RPM Fusion's signed packages,
-  or from Flathub.
-- Titanoboa, the tool that makes the `.iso`, is pinned to a reviewed commit (`TITANOBOA_COMMIT` in the
-  workflow).
-- Every image passes `build/check.sh`, and every script is syntax-checked, before anything is published.
+- **Updates:**
+  - The OS updates itself daily, and you can roll back from the boot menu.
+  - Flathub apps get security updates daily too, not only when you open Discover.
+  - Once you've set up a signing key (below), installed systems accept only OS updates signed with it.
+- **Firewall:** on, refusing incoming connections, except for finding printers and devices, file sharing,
+  KDE Connect, LocalSend and Steam Remote Play. Fedora's desktop default allows every port above 1024.
+- **Downloaded apps:** OmniLaunch asks before opening a Windows, Android or Linux app downloaded from the
+  internet, the way macOS and Windows do for their own apps, and remembers your answer.
+- **Where software comes from:**
+  - Fedora and RPM Fusion packages are signature-checked. RPM Fusion's own setup packages are checked
+    against its keys from Fedora's `distribution-gpg-keys`.
+  - Wine and umu-launcher must match the SHA-256 GitHub publishes for them.
+  - Android SDK files must match the checksums in Google's index.
+- **Build pipeline:**
+  - Every GitHub Action is pinned to an exact commit, and so is Titanoboa, the ISO builder.
+  - Each job's token has only the permissions it needs, and isn't left on the build machine.
+  - Every script is syntax-checked, and every image passes `build/check.sh`, before anything is published.
 
-Still to do before calling it production-ready:
+**Signing your images (recommended):**
 
-- **Image signing.** The OS image isn't signed yet, so the installer and updates skip signature checks.
-  The fix is to sign each published image (with cosign) and ship a trust policy that requires the signature.
-  Pinning the installer to one fixed image version isn't the answer: installed systems would never update.
+1. Run `./distro/make-signing-key.sh` on your Mac (needs `brew install cosign`).
+2. Commit `distro/signing/cosign.pub`.
+3. Add the `COSIGN_PRIVATE_KEY` and `COSIGN_PASSWORD` repository secrets.
+
+From then on, every image is signed and verified in CI, and the build refuses to publish an unsigned one.
+Installed systems switch to signature-checked updates on their first start. (The installer itself can't
+check signatures, so the switch happens just after installing.)
+
+**Known limits:**
+
+- **Wine isn't a sandbox.** A Windows app can read and change your files, like an app you install
+  normally. Only open apps you trust.
 - **NVIDIA and Secure Boot.** The driver loads only with Secure Boot off, or after enrolling a signing key
   (see Hardware support). Nouveau stays disabled, because NVIDIA's driver can't load if nouveau takes the
-  card first. The downside: NVIDIA cards older than RTX 20 / GTX 16, and any NVIDIA card while Secure Boot
-  blocks the driver, run on basic graphics.
+  card first. So NVIDIA cards older than RTX 20 / GTX 16, and any NVIDIA card while Secure Boot blocks
+  the driver, run on basic graphics.
+- **The live USB runs SELinux in permissive mode,** because files in the image carry no SELinux labels.
+  The installed system enforces SELinux.

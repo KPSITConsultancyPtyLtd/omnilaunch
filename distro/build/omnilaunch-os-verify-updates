@@ -1,0 +1,26 @@
+#!/usr/bin/bash
+# Runs once on an installed OmniLaunch OS: from now on, updates are accepted only if they're signed with
+# OmniLaunch OS's key (/etc/pki/containers/omnilaunch-os.pub, enforced by /etc/containers/policy.json).
+# The installer can't check signatures, so the system switches its update source over to checked
+# updates here. Same image, no download; it applies from the next restart.
+set -euo pipefail
+done_flag=/var/lib/omnilaunch-os/updates-verified
+mkdir -p "$(dirname "$done_flag")"
+
+read -r image signature < <(bootc status --format=json | python3 -c '
+import json, sys
+spec = (json.load(sys.stdin).get("spec") or {}).get("image") or {}
+sig = spec.get("signature")
+print(spec.get("image", ""), "checked" if sig and "containerPolicy" in json.dumps(sig) else "unchecked")')
+
+if [[ -z $image ]]; then echo "Not running from an image; nothing to do"; exit 0; fi
+if [[ $signature == checked ]]; then touch "$done_flag"; exit 0; fi
+
+# bootc checks the image's signature before switching and changes nothing if the check fails (no
+# network, or not signed yet), in which case this runs again at the next start.
+if ! bootc switch --enforce-container-sigpolicy --retain "$image"; then
+    echo "Couldn't confirm a signed $image yet; will try again at the next start" >&2
+    exit 1
+fi
+touch "$done_flag"
+echo "Updates for $image are now accepted only when signed with OmniLaunch OS's key"

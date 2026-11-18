@@ -11,6 +11,7 @@ import os
 import shutil
 import struct
 import subprocess
+import mmap
 import tempfile
 
 RT_ICON, RT_GROUP_ICON = 3, 14
@@ -54,7 +55,7 @@ def _entries(data: bytes, base: int, offset: int):
 
 def _leaf(data: bytes, base: int, offset: int, secs) -> bytes:
     """Follow the first entry down to a data entry and return its bytes."""
-    while True:
+    for _ in range(8):          # real files are 3 levels deep; a crafted loop must not hang us
         entries = _entries(data, base, offset)
         if not entries:
             raise ValueError("empty resource directory")
@@ -62,15 +63,17 @@ def _leaf(data: bytes, base: int, offset: int, secs) -> bytes:
         if not is_dir:
             rva, size = struct.unpack_from("<II", data, base + child)
             start = _rva_to_offset(rva, secs)
-            return data[start:start + size]
+            return bytes(data[start:start + size])
         offset = child
+    raise ValueError("resource directory nests too deeply")
 
 
 def extract_ico(exe_path: str) -> bytes | None:
     """The program's main icon as .ico bytes, or None if it has none."""
     try:
         with open(exe_path, "rb") as f:
-            data = f.read()
+            # Mapped, not read: installers can be gigabytes, and only a few small parts are needed.
+            data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         rsrc_rva, rsrc_size, secs = _sections(data)
         if not rsrc_rva:
             return None

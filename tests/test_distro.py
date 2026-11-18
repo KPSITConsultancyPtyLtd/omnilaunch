@@ -41,7 +41,9 @@ class ScriptTests(unittest.TestCase):
         for path in ("distro/build/install-layer.sh", "distro/build/check.sh", "distro/live/build.sh",
                      "distro/install-on-fedora.sh", "distro/build/kernel.sh", "distro/build/nvidia-kmod.sh",
                      "distro/build/drivers.sh", "distro/build/omnilaunch-os", "distro/make-secure-boot-key.sh",
-                     "distro/build/omnilaunch-os-apps", "distro/build/omnilaunch-os-welcome"):
+                     "distro/build/omnilaunch-os-apps", "distro/build/omnilaunch-os-welcome",
+                     "distro/build/rpmfusion.sh", "distro/build/omnilaunch-os-verify-updates",
+                     "distro/make-signing-key.sh"):
             r = subprocess.run(["bash", "-n", os.path.join(ROOT, path)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"{path}: {r.stderr}")
 
@@ -211,3 +213,38 @@ class ProtonSetupTests(unittest.TestCase):
             provision._install_proton(inst)
         self.assertNotIn(["sudo", "dnf", "install", "-y", "umu-launcher"], [c.args[0] for c in inst.run.call_args_list])
         self.assertEqual(fetch.call_args_list[1].args[0], "https://x/umu-launcher-1.3-zipapp.tar")
+
+
+class SecurityConfigTests(unittest.TestCase):
+    def test_rpmfusion_release_packages_are_signature_checked(self):
+        for script in ("drivers.sh", "nvidia-kmod.sh", "install-layer.sh"):
+            text = _read(os.path.join(ROOT, "distro", "build", script))
+            self.assertNotIn("mirrors.rpmfusion.org", text, f"{script} must use rpmfusion.sh")
+        text = _read(os.path.join(ROOT, "distro", "build", "rpmfusion.sh"))
+        self.assertIn("--setopt=localpkg_gpgcheck=1", text)
+        self.assertIn("distribution-gpg-keys", text)
+
+    def test_workflows_pin_actions_and_limit_tokens(self):
+        import glob
+        import re
+        for path in glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml")):
+            text = _read(path)
+            for ref in re.findall(r"uses:\s*(\S+)", text):
+                self.assertRegex(ref, r"@[0-9a-f]{40}$", f"{os.path.basename(path)}: {ref} isn't pinned to a commit")
+            self.assertIn("\npermissions:", text, f"{os.path.basename(path)} has no token permissions")
+            self.assertEqual(text.count("actions/checkout@"), text.count("persist-credentials: false"), path)
+
+    def test_signing_is_enforced_once_a_key_exists(self):
+        wf = _read(os.path.join(ROOT, ".github", "workflows", "distro.yml"))
+        self.assertIn("hashFiles('distro/signing/cosign.pub')", wf)
+        self.assertIn("cosign verify --key distro/signing/cosign.pub", wf)
+        layer = _read(os.path.join(ROOT, "distro", "build", "install-layer.sh"))
+        self.assertIn('"type": "sigstoreSigned"', layer)
+        verify = _read(os.path.join(ROOT, "distro", "build", "omnilaunch-os-verify-updates"))
+        self.assertIn("--enforce-container-sigpolicy", verify)
+
+    def test_firewall_does_not_open_every_high_port(self):
+        layer = _read(os.path.join(ROOT, "distro", "build", "install-layer.sh"))
+        zone = layer.split("/etc/firewalld/zones/omnilaunch.xml <<'EOF'", 1)[1].split("\nEOF", 1)[0]
+        self.assertNotIn("1025-65535", zone)
+        self.assertIn("DefaultZone=omnilaunch", layer)
