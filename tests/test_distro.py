@@ -248,3 +248,14 @@ class SecurityConfigTests(unittest.TestCase):
         zone = layer.split("/etc/firewalld/zones/omnilaunch.xml <<'EOF'", 1)[1].split("\nEOF", 1)[0]
         self.assertNotIn("1025-65535", zone)
         self.assertIn("DefaultZone=omnilaunch", layer)
+
+
+class CompatibilityStageTests(unittest.TestCase):
+    def test_real_apps_run_before_anything_is_published(self):
+        wf = _read(os.path.join(ROOT, ".github", "workflows", "distro.yml"))
+        self.assertLess(wf.index("bash /src/distro/build/compat-test.sh"), wf.index("Publish the OS image"))
+        test = _read(os.path.join(ROOT, "distro", "build", "compat-test.py"))
+        for scenario in ("putty_window", "seven_zip_install_and_use", "appimage_runs", "android_app_routed"):
+            self.assertIn(f"check(", test)
+            self.assertIn(scenario, test)
+        self.assertIn('sys.path.insert(0, "/usr/lib/omnilaunch")', test)   # tests the image's own copy

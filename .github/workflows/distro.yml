@@ -68,7 +68,7 @@ jobs:
         run: |
           for f in $(find distro -type f -name '*.sh') distro/build/omnilaunch-os distro/build/omnilaunch-os-apps \
                    distro/build/omnilaunch-os-welcome distro/build/omnilaunch-os-verify-updates; do bash -n "$f" || exit 1; done
-          python3 -m py_compile distro/build/set-defaults.py
+          python3 -m py_compile distro/build/set-defaults.py distro/build/compat-test.py
 
       - name: Build the OS image
         env:
@@ -94,6 +94,15 @@ jobs:
 
       - name: Check the OS image
         run: sudo podman run --rm -v "$PWD/distro/build/check.sh:/check.sh:ro" localhost/omnilaunch-os:latest bash /check.sh
+
+      - name: Run real Windows, Linux and Android apps in the OS image
+        timeout-minutes: 40
+        env:
+          # PCs must run Windows apps. On ARM they go through FEX, which CI machines may not allow.
+          REQUIRE_WINDOWS: ${{ matrix.arch == 'x86_64' && '1' || '0' }}
+        run: |
+          sudo podman run --rm --privileged --device /dev/fuse -e REQUIRE_WINDOWS \
+            -v "$PWD:/src:ro" localhost/omnilaunch-os:latest bash /src/distro/build/compat-test.sh
 
       - name: Publish the OS image (installed systems update from here)
         if: github.ref == 'refs/heads/main'
