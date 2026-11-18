@@ -57,7 +57,7 @@ fi
 log "Installing compatibility helpers for $ARCH"
 dnf -y install --skip-unavailable "${wanted[@]}"
 missing=()
-for p in "${wanted[@]}"; do rpm -q "${p%.i686}" >/dev/null 2>&1 || missing+=("$p"); done
+for p in "${wanted[@]}"; do rpm -q "$p" >/dev/null 2>&1 || missing+=("$p"); done
 if ((${#missing[@]})); then echo "Not available on this Fedora (skipped): ${missing[*]}"; fi
 for p in "${required[@]}"; do rpm -q "$p" >/dev/null || { echo "Required package $p is missing" >&2; exit 1; }; done
 
@@ -74,6 +74,8 @@ name, url = p.pick_release_asset(json.loads(p._fetch(p.WINE_X64_RELEASES_API)), 
 print(name, url)')
     echo "using $name"
     tmp=$(mktemp -d)
+    echo "Refusing unverified upstream Wine binary download: supply a packaged and verified Wine runtime" >&2
+    exit 1
     curl -fsSL --retry 4 -o "$tmp/wine.tar.xz" "$url"
     rm -rf /usr/lib/omnilaunch-wine && mkdir -p /usr/lib/omnilaunch-wine
     tar -xJf "$tmp/wine.tar.xz" -C /usr/lib/omnilaunch-wine --strip-components=1
@@ -93,6 +95,8 @@ from omnilaunch import provision as p
 print(*p.pick_release_asset(json.loads(p._fetch(p.UMU_RELEASES_API)), p.UMU_ZIPAPP_PATTERNS))')
     echo "using $name"
     tmp=$(mktemp -d)
+    echo "Refusing unverified upstream umu download: install the Fedora umu-launcher package" >&2
+    exit 1
     curl -fsSL --retry 4 -o "$tmp/$name" "$url"
     rm -rf /usr/lib/umu && mkdir -p /usr/lib/umu
     tar -xf "$tmp/$name" -C /usr/lib/umu

@@ -50,7 +50,11 @@ jobs:
           if [ "${mnt_free:-0}" -gt "$root_free" ]; then work=/mnt/work; else work=/var/tmp/work; fi
           sudo mkdir -p "$work/containers" "$work/tmp" "$work/iso"
           sudo chmod 1777 "$work/tmp"
-          printf '[storage]\ndriver = "overlay"\nrunroot = "/run/containers/storage"\ngraphroot = "%s/containers"\n' "$work" | sudo tee /etc/containers/storage.conf
+          printf '[storage]
+driver = "overlay"
+runroot = "/run/containers/storage"
+graphroot = "%s/containers"
+' "$work" | sudo tee /etc/containers/storage.conf
           echo "WORK=$work" >> "$GITHUB_ENV"
           df -h / /mnt 2>/dev/null || df -h /
 
@@ -59,6 +63,11 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq podman skopeo
           podman --version
+
+      - name: Validate distro shell scripts
+        run: |
+          find distro -type f -name "*.sh" -print0 | xargs -0 -r -n1 bash -n
+          bash -n distro/build/omnilaunch-os-apps distro/build/omnilaunch-os
 
       - name: Build the OS image
         env:
@@ -98,15 +107,25 @@ jobs:
           sudo podman logout ghcr.io
 
       - name: Build the live USB image
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
+        env:
+          INSTALL_IMAGE_DIGEST: ${{ vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST }}
         run: |
-          sudo TMPDIR="$WORK/tmp" podman build --build-arg IMAGE_REF="$IMAGE:latest" \
+          [[ "$INSTALL_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Expected a full SHA-256 digest"; exit 1; }
+          sudo TMPDIR="$WORK/tmp" podman build --build-arg IMAGE_REF="$IMAGE@$INSTALL_IMAGE_DIGEST" \
             -t localhost/omnilaunch-os-live:latest -f distro/Containerfile.live .
           sudo podman image prune -f >/dev/null
           df -h "$WORK"
 
+      - name: Validate installer digest is configured
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST == ''
+        run: echo "::warning::Skipping ISO: set OMNILAUNCH_INSTALL_IMAGE_DIGEST to a verified, architecture-matching sha256 image digest."
+
       - name: Make the .iso (titanoboa)
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         run: |
           git clone --depth 1 https://github.com/ublue-os/titanoboa "$RUNNER_TEMP/titanoboa"
+          # TODO: pin this dependency to a reviewed commit SHA before a production release.
           # titanoboa's main.sh. Keep files' real owners (titanoboa makes everything root's, which is wrong for a few files).
           sed -i 's/ -all-root//' "$RUNNER_TEMP/titanoboa/build_iso.sh"
           grep -q -- '-all-root' "$RUNNER_TEMP/titanoboa/build_iso.sh" && { echo "couldn't patch titanoboa"; exit 1; }
@@ -123,22 +142,25 @@ jobs:
           echo "ISO=$WORK/iso/$name" >> "$GITHUB_ENV"
 
       - name: Check the installer installs OmniLaunch OS from the registry
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         run: |
           sudo apt-get install -yq squashfs-tools xorriso >/dev/null
           sudo xorriso -osirrox on -indev "$ISO" -extract /LiveOS/squashfs.img "$WORK/squashfs.img" 2>&1 | tail -1
           sudo unsquashfs -cat "$WORK/squashfs.img" usr/share/anaconda/interactive-defaults.ks | tee ks.txt | tail -3
-          grep -q "ostreecontainer --url=$IMAGE:latest" ks.txt
+          grep -qF "ostreecontainer --url=$IMAGE@${{ vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST }}" ks.txt
+          ! grep -q -- "--no-signature-verification" ks.txt
           sudo rm -f "$WORK/squashfs.img"
           size=$(stat -c %s "$ISO"); echo "ISO size: $((size / 1024 / 1024)) MB"
 
       - name: Check the .iso has its boot files and live system
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         run: |
           sudo apt-get install -yq xorriso >/dev/null
           xorriso -indev "$ISO" -ls /LiveOS /images/pxeboot /EFI/BOOT 2>&1 | tee files.txt
           grep -q squashfs.img files.txt && grep -q vmlinuz files.txt && grep -q initrd.img files.txt
 
       - name: Boot the .iso in a virtual machine
-        if: matrix.arch == 'x86_64'
+        if: matrix.arch == 'x86_64' && vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         timeout-minutes: 20
         run: |
           if [ ! -e /dev/kvm ]; then echo "No KVM on this runner; skipping the boot test"; exit 0; fi
@@ -164,6 +186,7 @@ jobs:
           echo "PASS  the live USB boots to OmniLaunch OS"
 
       - uses: actions/upload-artifact@v4
+        if: vars.OMNILAUNCH_INSTALL_IMAGE_DIGEST != ''
         with:
           name: OmniLaunch-OS-${{ matrix.arch }}
           path: |

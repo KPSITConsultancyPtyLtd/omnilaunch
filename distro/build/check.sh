@@ -27,6 +27,7 @@ check "automatic updates" systemctl is-enabled omnilaunch-os-update.timer
 check "omnilaunch-os helper" bash -c 'omnilaunch-os help | grep -q rollback'
 check "Flathub in Discover" grep -q "dl.flathub.org" /etc/flatpak/remotes.d/flathub.flatpakrepo
 check "Distrobox (apps from other Linux distros)" rpm -q distrobox
+check "first-run app installer syntax" bash -n /usr/libexec/omnilaunch-os-apps
 check "apps install from Flathub on first start" bash -c 'systemctl is-enabled omnilaunch-os-apps.service && grep -q "^org.gimp.GIMP" /usr/share/omnilaunch-os/apps.list'
 check "welcome message at login" test -x /usr/libexec/omnilaunch-os-welcome
 check "default browser" grep -Eq "^x-scheme-handler/https=(org.mozilla.firefox|firefox).desktop" /etc/xdg/kde-mimeapps.list
