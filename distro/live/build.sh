@@ -12,7 +12,9 @@ mkdir -p "$(realpath /root)"
 # ---------------------------------------------------------------- what the installer installs
 # The installer downloads OmniLaunch OS from its online registry, so the installed system gets
 # automatic updates from there and the USB stays small.
-IMAGE_REF=${IMAGE_REF:?the online image to install, e.g. ghcr.io/owner/omnilaunch-os@sha256:...}\n# Do not permit mutable tags: a published ISO must install exactly the image it was tested against.\n[[ "$IMAGE_REF" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "IMAGE_REF must be a sha256 digest reference" >&2; exit 1; }
+IMAGE_REF=${IMAGE_REF:?the online image to install, e.g. ghcr.io/owner/omnilaunch-os:latest}
+# A tag, not a fixed digest: the installed system follows it, which is how it gets updates.
+[[ $IMAGE_REF =~ ^[a-z0-9.-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+$ ]] || { echo "IMAGE_REF must be registry/name:tag" >&2; exit 1; }
 
 # ---------------------------------------------------------------- boot from USB
 dnf install -y dracut-live livesys-scripts
@@ -45,7 +47,8 @@ EOF
 cat >> /usr/share/anaconda/interactive-defaults.ks <<EOF
 
 # Install OmniLaunch OS from its online registry (needs internet during installation).
-ostreecontainer --url=${IMAGE_REF}
+# Images aren't signed yet, so signature checks are skipped (see distro/README.md, Security).
+ostreecontainer --url=${IMAGE_REF} --no-signature-verification
 EOF
 echo "${IMAGE_REF}" > /usr/share/omnilaunch-os-installs
 

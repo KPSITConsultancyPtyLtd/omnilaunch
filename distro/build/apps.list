@@ -1,6 +1,7 @@
 # Apps OmniLaunch OS installs from Flathub on first start (in the background, once per app: an app the
 # user removes isn't put back). Flathub apps update on their own and can be removed in Discover.
 # Format: <Flathub app id>  [architectures, if not all]   # what it is
+# Sections marked [optional] are skipped when /etc/omnilaunch-os/apps-profile says "essential".
 
 # ---- Everyday
 org.mozilla.Thunderbird                     # email and calendar
@@ -15,7 +16,7 @@ org.kde.kcalc                               # calculator
 org.localsend.localsend_app                 # send files to nearby phones and computers (like AirDrop)
 org.keepassxc.KeePassXC                     # password manager
 
-# ---- Creative suite (open-source alternatives to Adobe's apps)
+# ---- Creative suite (open-source alternatives to Adobe's apps) [optional]
 org.gimp.GIMP                               # photo editing (Photoshop)
 org.kde.krita                               # digital painting (Photoshop/Fresco painting)
 org.inkscape.Inkscape                       # vector graphics (Illustrator)
@@ -27,7 +28,7 @@ org.audacityteam.Audacity                   # audio editing (Audition)
 com.obsproject.Studio                       # screen recording and live streaming
 fr.handbrake.ghb                            # convert and compress videos (Media Encoder)
 
-# ---- Games
+# ---- Games [optional]
 com.heroicgameslauncher.hgl  x86_64         # Epic Games, GOG and Amazon games
 net.davidotek.pupgui2        x86_64         # newer Proton versions for Steam and Heroic
 

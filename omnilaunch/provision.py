@@ -6,6 +6,7 @@ Each component knows whether it's installed and how to install it on this kind o
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -56,6 +57,7 @@ RUN mkdir -p /src /out/lib && curl -fsSL "https://github.com/ptitSeb/box64/archi
 # Stage 2: the runtime: ARM64 Debian with Box64 and Intel (WoW64) Wine.
 FROM debian:trixie-slim
 ARG WINE_URL
+ARG WINE_SHA256
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl xz-utils \
       libx11-6 libxext6 libxrender1 libxrandr2 libxi6 libxcursor1 libxinerama1 libxcomposite1 \
@@ -65,6 +67,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY --from=box64 /out/box64 /usr/local/bin/box64
 COPY --from=box64 /out/lib/ /usr/lib/box64-x86_64-linux-gnu/
 RUN curl -fsSL "$WINE_URL" -o /tmp/wine.tar.xz \
+    && if [ -n "$WINE_SHA256" ]; then echo "$WINE_SHA256  /tmp/wine.tar.xz" | sha256sum -c -; fi \
     && mkdir -p /opt/wine && tar -xJf /tmp/wine.tar.xz -C /opt/wine --strip-components=1 \
     && rm /tmp/wine.tar.xz
 ENV PATH=/opt/wine/bin:$PATH BOX64_NOBANNER=1 BOX64_LOG=0
@@ -171,8 +174,7 @@ def _fetch_once(url: str, dest: str | None = None) -> bytes:
     return data
 
 
-def pick_release_asset(releases: list[dict], patterns: list[str]) -> tuple[str, str]:
-    """First asset (newest release first) matching the first pattern that matches anything."""
+def _find_asset(releases: list[dict], patterns: list[str]) -> dict:
     for pattern in patterns:
         rx = re.compile(pattern, re.IGNORECASE)
         for rel in releases:
@@ -180,8 +182,50 @@ def pick_release_asset(releases: list[dict], patterns: list[str]) -> tuple[str, 
                 continue
             for asset in rel.get("assets", []):
                 if rx.search(asset.get("name", "")):
-                    return asset["name"], asset["browser_download_url"]
+                    return asset
     raise SetupError("Couldn't find a matching download. Check your internet connection and try again.")
+
+
+def pick_release_asset(releases: list[dict], patterns: list[str]) -> tuple[str, str]:
+    """First asset (newest release first) matching the first pattern that matches anything."""
+    asset = _find_asset(releases, patterns)
+    return asset["name"], asset["browser_download_url"]
+
+
+def asset_sha256(releases: list[dict], patterns: list[str]) -> str | None:
+    """The SHA-256 GitHub records for that asset ("digest": "sha256:..."), or None for old uploads."""
+    digest = _find_asset(releases, patterns).get("digest") or ""
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        return digest.split(":", 1)[1]
+    return None
+
+
+def sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def download_release_asset(releases: list[dict], patterns: list[str], folder: str,
+                           require_digest: bool = False) -> str:
+    """Downloads the newest matching release file into folder and checks it against the SHA-256 that
+    GitHub publishes for it. A mismatch is always an error; a missing checksum is one if require_digest.
+    Returns the file's path."""
+    name, url = pick_release_asset(releases, patterns)
+    expected = asset_sha256(releases, patterns)
+    if expected is None and require_digest:
+        raise SetupError(f"{name} has no published checksum, so it can't be verified. Not installing it.")
+    path = os.path.join(folder, name)
+    _fetch(url, path)
+    if expected is not None:
+        actual = sha256_file(path)
+        if actual != expected:
+            os.remove(path)
+            raise SetupError(f"{name} didn't match its published checksum (expected {expected}, got {actual}). "
+                             "The download was damaged or tampered with, so it was deleted.")
+    return path
 
 
 # ---------------------------------------------------------------- package managers
@@ -217,11 +261,10 @@ def _install_wine(inst: Installer) -> None:
         inst.note(f"download it and unpack 'Wine Stable.app' into {apps}")
         return
     releases = json.loads(_fetch(WINE_RELEASES_API))
-    name, url = pick_release_asset(releases, [r"^wine-stable.*\.tar\.xz$", r"^wine-devel.*\.tar\.xz$"])
+    patterns = [r"^wine-stable.*\.tar\.xz$", r"^wine-devel.*\.tar\.xz$"]
     tmp = tempfile.mkdtemp(prefix="omnilaunch-")
-    archive = os.path.join(tmp, name)
-    inst.log(f"downloading {name} ...")
-    _fetch(url, archive)
+    inst.log(f"downloading {pick_release_asset(releases, patterns)[0]} ...")
+    archive = download_release_asset(releases, patterns, tmp)
     os.makedirs(apps, exist_ok=True)
     inst.run(["tar", "-xJf", archive, "-C", apps])
     for app in os.listdir(apps):
@@ -246,11 +289,9 @@ def _install_proton(inst: Installer) -> None:
     if inst.dry_run:
         return
     releases = json.loads(_fetch(UMU_RELEASES_API))
-    name, url = pick_release_asset(releases, UMU_ZIPAPP_PATTERNS)
     tmp = tempfile.mkdtemp(prefix="omnilaunch-")
-    archive = os.path.join(tmp, name)
-    inst.log(f"downloading {name} ...")
-    _fetch(url, archive)
+    inst.log(f"downloading {pick_release_asset(releases, UMU_ZIPAPP_PATTERNS)[0]} ...")
+    archive = download_release_asset(releases, UMU_ZIPAPP_PATTERNS, tmp)
     os.makedirs(dest, exist_ok=True)
     inst.run(["tar", "-xf", archive, "-C", dest])
     shutil.rmtree(tmp, ignore_errors=True)
@@ -287,10 +328,9 @@ def _install_xquartz(inst: Installer) -> None:
         inst.note("download the newest XQuartz installer (github.com/XQuartz/XQuartz) and open it")
     else:
         releases = json.loads(_fetch(XQUARTZ_RELEASES_API))
-        name, url = pick_release_asset(releases, [r"^XQuartz-[\d.]+\.pkg$"])
-        pkg = os.path.join(tempfile.mkdtemp(prefix="omnilaunch-"), name)
-        inst.log(f"downloading {name} ...")
-        _fetch(url, pkg)
+        patterns = [r"^XQuartz-[\d.]+\.pkg$"]
+        inst.log(f"downloading {pick_release_asset(releases, patterns)[0]} ...")
+        pkg = download_release_asset(releases, patterns, tempfile.mkdtemp(prefix="omnilaunch-"))
         inst.run(["open", "-W", pkg])   # Apple's installer window; waits until it closes
     # Let containers connect to the Mac's display over the local network.
     inst.run(["defaults", "write", "org.xquartz.X11", "nolisten_tcp", "-bool", "false"])
@@ -352,13 +392,16 @@ def _install_box64(inst: Installer) -> None:
     if inst.dry_run:
         inst.note("find the newest Box64 release (github.com/ptitSeb/box64) and Intel (amd64-wow64) Wine "
                   "build (github.com/Kron4ek/Wine-Builds)")
-        url, tag = "<wine-amd64-wow64.tar.xz>", "<box64 release>"
+        url, tag, sha = "<wine-amd64-wow64.tar.xz>", "<box64 release>", ""
     else:
-        name, url = pick_release_asset(json.loads(_fetch(WINE_X64_RELEASES_API)), WINE_X64_PATTERNS)
+        wine_releases = json.loads(_fetch(WINE_X64_RELEASES_API))
+        name, url = pick_release_asset(wine_releases, WINE_X64_PATTERNS)
+        sha = asset_sha256(wine_releases, WINE_X64_PATTERNS) or ""
         tag = newest_release_tag(json.loads(_fetch(BOX64_RELEASES_API)))
         inst.log(f"using {name} and Box64 {tag}")
     inst.run([engine or "docker", "build", "--platform", "linux/arm64", "-t", runners.BOX64_IMAGE,
-              "--build-arg", f"WINE_URL={url}", "--build-arg", f"BOX64_TAG={tag}", "-"],
+              "--build-arg", f"WINE_URL={url}", "--build-arg", f"WINE_SHA256={sha}",
+              "--build-arg", f"BOX64_TAG={tag}", "-"],
              input=BOX64_DOCKERFILE.encode())
 
 

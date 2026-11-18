@@ -247,3 +247,43 @@ class VMTests(TmpCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifiedDownloadTests(unittest.TestCase):
+    """Release files are checked against the SHA-256 GitHub publishes for them."""
+
+    def _releases(self, digest):
+        asset = {"name": "wine-11.0-amd64-wow64.tar.xz", "browser_download_url": "https://x/wine.tar.xz"}
+        if digest is not None:
+            asset["digest"] = digest
+        return [{"tag_name": "11.0", "assets": [asset]}]
+
+    def _download(self, releases, content=b"wine", require=False):
+        import hashlib
+        import tempfile
+        folder = tempfile.mkdtemp()
+
+        def fake_fetch(url, dest=None):
+            with open(dest, "wb") as f:
+                f.write(content)
+            return b""
+        with mock.patch.object(provision, "_fetch", side_effect=fake_fetch):
+            return provision.download_release_asset(releases, provision.WINE_X64_PATTERNS, folder, require), folder
+
+    def test_matching_checksum_is_accepted(self):
+        import hashlib
+        good = "sha256:" + hashlib.sha256(b"wine").hexdigest()
+        path, _ = self._download(self._releases(good), require=True)
+        self.assertTrue(path.endswith("wine-11.0-amd64-wow64.tar.xz"))
+
+    def test_wrong_checksum_is_refused_and_deleted(self):
+        bad = "sha256:" + "0" * 64
+        with self.assertRaises(provision.SetupError) as e:
+            self._download(self._releases(bad))
+        self.assertIn("didn't match", str(e.exception))
+
+    def test_missing_checksum_refused_only_when_required(self):
+        path, _ = self._download(self._releases(None))                   # Mac setup: allowed
+        self.assertTrue(os.path.exists(path))
+        with self.assertRaises(provision.SetupError):
+            self._download(self._releases(None), require=True)           # OS image build: refused

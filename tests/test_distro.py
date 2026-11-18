@@ -111,6 +111,63 @@ class ScriptTests(unittest.TestCase):
                     owner = app.rsplit(".", 1)[0] if app.startswith("org.libreoffice.LibreOffice.") else app
                     self.assertTrue(owner in flathub or app in base, f"{line}: {app} isn't installed")
 
+    def _run_app_installer(self, apps_list, profile=None, installed=""):
+        d = tempfile.mkdtemp()
+        apps = os.path.join(d, "apps.list")
+        with open(apps, "w") as f:
+            f.write(apps_list)
+        state = os.path.join(d, "state")
+        os.makedirs(state)
+        with open(os.path.join(state, "apps-installed"), "w") as f:
+            f.write(installed)
+        profile_file = os.path.join(d, "apps-profile")
+        if profile is not None:
+            with open(profile_file, "w") as f:
+                f.write(profile + "\n")
+        bindir = os.path.join(d, "bin")
+        os.makedirs(bindir)
+        with open(os.path.join(bindir, "flatpak"), "w") as f:
+            f.write('#!/bin/sh\n[ "$1" = install ] && echo "$6" >> "%s/calls"\nexit 0\n' % d)
+        with open(os.path.join(bindir, "uname"), "w") as f:
+            f.write("#!/bin/sh\necho aarch64\n")
+        for tool in ("flatpak", "uname"):
+            os.chmod(os.path.join(bindir, tool), 0o755)
+        src = _read(os.path.join(ROOT, "distro", "build", "omnilaunch-os-apps"))
+        src = (src.replace("/usr/share/omnilaunch-os/apps.list", apps).replace("/var/lib/omnilaunch-os", state)
+               .replace("/etc/omnilaunch-os/apps-profile", profile_file))
+        script = os.path.join(d, "run.sh")
+        with open(script, "w") as f:
+            f.write(src)
+        r = subprocess.run(["bash", script], env=dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"]),
+                           capture_output=True, text=True)
+        calls = _read(os.path.join(d, "calls")).split() if os.path.exists(os.path.join(d, "calls")) else []
+        return r, calls
+
+    SECTIONS = ("# ---- Everyday\norg.a.Office\n# ---- Creative suite [optional]\norg.b.Paint\n"
+                "# ---- Games [optional]\norg.c.Game\n# ---- Looking after apps\norg.d.Seal\n")
+
+    def test_all_apps_by_default(self):
+        r, calls = self._run_app_installer(self.SECTIONS)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(calls, ["org.a.Office", "org.b.Paint", "org.c.Game", "org.d.Seal"])
+
+    def test_essential_profile_skips_optional_sections(self):
+        r, calls = self._run_app_installer(self.SECTIONS, profile="essential")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(calls, ["org.a.Office", "org.d.Seal"])
+
+    def test_unknown_profile_is_refused(self):
+        r, calls = self._run_app_installer(self.SECTIONS, profile="everything")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(calls, [])
+
+    def test_shipped_list_marks_creative_and_games_optional(self):
+        headings = [l for l in _read(os.path.join(ROOT, "distro", "build", "apps.list")).splitlines()
+                    if l.startswith("# ----")]
+        optional = [h for h in headings if "[optional]" in h]
+        self.assertEqual(len(optional), 2, headings)
+        self.assertTrue(any("Creative" in h for h in optional) and any("Games" in h for h in optional))
+
     def test_app_installer_respects_architectures_and_removals(self):
         d = tempfile.mkdtemp()
         apps = os.path.join(d, "apps.list")

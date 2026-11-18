@@ -24,6 +24,15 @@ case ${1:-status} in
         echo "If an update was downloaded, it's used from the next restart. Your files and apps stay."
         ;;
     apps)
+        if [[ ${2:-} == essential || ${2:-} == full ]]; then
+            need_root "$@"
+            mkdir -p /etc/omnilaunch-os && echo "$2" > /etc/omnilaunch-os/apps-profile
+            echo "App set: $2. (Switching never removes apps; remove any you don't want in Discover.)"
+            systemctl restart --no-block omnilaunch-os-apps.service
+            exit 0
+        fi
+        echo "App set: $(cat /etc/omnilaunch-os/apps-profile 2>/dev/null || echo full)" \
+             "(change with: omnilaunch-os apps essential|full)"
         echo "App setup: $(cat /var/lib/omnilaunch-os/apps-status 2>/dev/null || echo 'not started')"
         (plasma-discover >/dev/null 2>&1 &)
         ;;

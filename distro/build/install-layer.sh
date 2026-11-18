@@ -17,6 +17,20 @@ ARCH=$(uname -m)
 . /etc/os-release
 log() { printf '\n==> %s\n' "$*"; }
 
+# Downloads the newest release file matching OmniLaunch's patterns into a folder and prints its path.
+# Refuses a file without a published SHA-256, or one that doesn't match it.
+verified_download() {  # verified_download <API constant> <patterns constant> <folder>
+    PYTHONPATH="$SRC" python3 -c '
+import json, sys
+from omnilaunch import provision as p
+api, patterns, folder = sys.argv[1:]
+try:
+    releases = json.loads(p._fetch(getattr(p, api)))
+    print(p.download_release_asset(releases, getattr(p, patterns), folder, require_digest=True))
+except p.SetupError as e:
+    sys.exit(f"Refusing to install: {e}")' "$@"
+}
+
 # ---------------------------------------------------------------- helpers from Fedora's own repositories
 common=(
     python3            # OmniLaunch itself
@@ -66,19 +80,13 @@ for p in "${required[@]}"; do rpm -q "$p" >/dev/null || { echo "Required package
 # (amd64, WoW64) Wine build runs through FEX transparently: binfmt-dispatcher hands any x86 program
 # to FEX (inside muvm on Apple Silicon's 16K pages), so `wine` just works.
 if [[ $ARCH == aarch64 ]]; then
-    log "Installing Intel Wine (translated by FEX)"
-    read -r name url < <(PYTHONPATH="$SRC" python3 -c '
-import json
-from omnilaunch import provision as p
-name, url = p.pick_release_asset(json.loads(p._fetch(p.WINE_X64_RELEASES_API)), p.WINE_X64_PATTERNS)
-print(name, url)')
-    echo "using $name"
+    log "Installing Intel Wine (translated by FEX), checked against its published SHA-256"
     tmp=$(mktemp -d)
-    echo "Refusing unverified upstream Wine binary download: supply a packaged and verified Wine runtime" >&2
-    exit 1
-    curl -fsSL --retry 4 -o "$tmp/wine.tar.xz" "$url"
+    archive=$(verified_download WINE_X64_RELEASES_API WINE_X64_PATTERNS "$tmp")
+    name=$(basename "$archive")
+    echo "using $name"
     rm -rf /usr/lib/omnilaunch-wine && mkdir -p /usr/lib/omnilaunch-wine
-    tar -xJf "$tmp/wine.tar.xz" -C /usr/lib/omnilaunch-wine --strip-components=1
+    tar -xJf "$archive" -C /usr/lib/omnilaunch-wine --strip-components=1
     rm -rf "$tmp"
     for tool in wine wineserver wineboot winecfg msiexec regedit; do
         [[ -e /usr/lib/omnilaunch-wine/bin/$tool ]] && ln -sfn "/usr/lib/omnilaunch-wine/bin/$tool" "/usr/bin/$tool"
@@ -88,18 +96,13 @@ fi
 
 # ---------------------------------------------------------------- Proton launcher, when Fedora lacks it
 if [[ $ARCH == x86_64 ]] && ! command -v umu-run >/dev/null; then
-    log "Installing umu-launcher (Proton) from its releases"
-    read -r name url < <(PYTHONPATH="$SRC" python3 -c '
-import json
-from omnilaunch import provision as p
-print(*p.pick_release_asset(json.loads(p._fetch(p.UMU_RELEASES_API)), p.UMU_ZIPAPP_PATTERNS))')
-    echo "using $name"
+    log "Installing umu-launcher (Proton) from its releases, checked against its published SHA-256"
     tmp=$(mktemp -d)
-    echo "Refusing unverified upstream umu download: install the Fedora umu-launcher package" >&2
-    exit 1
-    curl -fsSL --retry 4 -o "$tmp/$name" "$url"
+    archive=$(verified_download UMU_RELEASES_API UMU_ZIPAPP_PATTERNS "$tmp")
+    name=$(basename "$archive")
+    echo "using $name"
     rm -rf /usr/lib/umu && mkdir -p /usr/lib/umu
-    tar -xf "$tmp/$name" -C /usr/lib/umu
+    tar -xf "$archive" -C /usr/lib/umu
     rm -rf "$tmp"
     umu=$(find /usr/lib/umu -name umu-run -type f | head -1)
     [[ -n $umu ]] || { echo "umu-run not found in $name" >&2; exit 1; }

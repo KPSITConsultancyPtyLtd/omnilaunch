@@ -34,8 +34,10 @@ set that up, turn Secure Boot off in the PC's firmware settings (everything else
 
 ## Apps, ready to use
 
-After the first start, OmniLaunch OS installs the Everyday apps from Flathub in the background (a notification says
-when they're ready). Each updates itself and can be removed in Discover. An app you remove stays removed.\n\nThe Creative suite and Games Flatpaks are optional to avoid a large first-boot download.\nTo opt into all curated apps, run `echo full | sudo tee /etc/omnilaunch-os/apps-profile`\nand then `sudo systemctl restart omnilaunch-os-apps.service`. This installs the additional\napps; it does not remove anything already installed.
+After the first start, OmniLaunch OS installs these from Flathub in the background (a notification says
+when they're ready). Each updates itself and can be removed in Discover. An app you remove stays removed.
+The full set is a few GB; to skip the creative suite and games, run `omnilaunch-os apps essential`
+(`omnilaunch-os apps full` brings them back; switching never removes anything).
 
 | For | App | Instead of |
 |---|---|---|
@@ -73,7 +75,7 @@ updates them. Windows `.exe` and Android `.apk` files just open with a double-cl
 GitHub builds it: **Actions → distro → the latest run → Artifacts**. There's one `.iso` (about 5–6 GB) per
 CPU type, kept for a day. **Run workflow** builds a fresh one.
 
-Installing downloads the architecture-specific published image from `ghcr.io/kpsitconsultancyptyltd/omnilaunch-os`, so it needs
+Installing downloads OmniLaunch OS from `ghcr.io/kpsitconsultancyptyltd/omnilaunch-os`, so it needs
 internet. The package must be **public**: GitHub → your profile → Packages → omnilaunch-os → Package settings
 → Change visibility. Making it public also makes the OmniLaunch code inside the image visible to anyone.
 
@@ -118,18 +120,23 @@ The rest:
   [Titanoboa](https://github.com/ublue-os/titanoboa) turns them into the `.iso`.
 - `build/check.sh` is what CI verifies in every image before publishing it.
 
+## Security
 
-### Release security gate (hardening branch)
+What's checked today:
 
-The ISO build is deliberately disabled unless the repository variable
-`OMNILAUNCH_INSTALL_IMAGE_DIGEST` is set to a reviewed, architecture-matching
-`sha256:<64 hexadecimal characters>` image digest. The installer accepts only
-`ghcr.io/...@sha256:...` references and does not request bypassing signature
-verification. **Digest pinning is not a substitute for publisher identity
-verification.** Configure and test the appropriate bootc/ostree container trust
-policy and signed image publishing before enabling production installations.
+- Wine and umu-launcher, downloaded from their GitHub releases, must match the SHA-256 GitHub publishes
+  for each file, or the build stops. Everything else comes from Fedora's and RPM Fusion's signed packages,
+  or from Flathub.
+- Titanoboa, the tool that makes the `.iso`, is pinned to a reviewed commit (`TITANOBOA_COMMIT` in the
+  workflow).
+- Every image passes `build/check.sh`, and every script is syntax-checked, before anything is published.
 
-This variable currently applies to the whole build matrix; do not enable the
-ISO build for both architectures with a single architecture-specific digest.
-A per-architecture digest resolution step and signed manifest publication are
-still required. Production ISO release remains blocked pending that work.
+Still to do before calling it production-ready:
+
+- **Image signing.** The OS image isn't signed yet, so the installer and updates skip signature checks.
+  The fix is to sign each published image (with cosign) and ship a trust policy that requires the signature.
+  Pinning the installer to one fixed image version isn't the answer: installed systems would never update.
+- **NVIDIA and Secure Boot.** The driver loads only with Secure Boot off, or after enrolling a signing key
+  (see Hardware support). Nouveau stays disabled, because NVIDIA's driver can't load if nouveau takes the
+  card first. The downside: NVIDIA cards older than RTX 20 / GTX 16, and any NVIDIA card while Secure Boot
+  blocks the driver, run on basic graphics.

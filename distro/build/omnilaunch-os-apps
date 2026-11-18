@@ -8,11 +8,11 @@ state=/var/lib/omnilaunch-os
 installed=$state/apps-installed
 status=$state/apps-status
 arch=$(uname -m)
-# Minimal first boot avoids silently downloading the creative and gaming suites.
-# Admins may opt in to all apps with /etc/omnilaunch-os/apps-profile containing "full".
-profile_file=/etc/omnilaunch-os/apps-profile
-profile=$(cat "$profile_file" 2>/dev/null || echo essential)
-case "$profile" in essential|full) ;; *) echo "Invalid apps profile: $profile" >&2; exit 2 ;; esac
+# Which apps: "full" (default: everything in the list) or "essential" (skips sections marked [optional],
+# the large creative and games downloads). Set by writing the word to /etc/omnilaunch-os/apps-profile.
+profile=$(tr -d '[:space:]' < /etc/omnilaunch-os/apps-profile 2>/dev/null || true)
+profile=${profile:-full}
+case "$profile" in essential|full) ;; *) echo "Unknown apps profile '$profile' (use essential or full)" >&2; exit 2 ;; esac
 section=essential
 mkdir -p "$state"
 touch "$installed"
@@ -22,13 +22,11 @@ flatpak remote-add --system --if-not-exists flathub /etc/flatpak/remotes.d/flath
 
 todo=()
 while IFS= read -r line || [[ -n $line ]]; do
-    if [[ $line == \#* ]]; then
-        case "$line" in
-            *"Creative suite"*|*"Games"*) section=optional ;;
-            *"Looking after apps"*) section=essential ;;
-        esac
+    if [[ $line == "# ----"* ]]; then                 # a section heading
+        [[ $line == *"[optional]"* ]] && section=optional || section=essential
         continue
     fi
+    [[ $line == \#* ]] && continue
     [[ $profile == essential && $section == optional ]] && continue
     read -r id archs _ <<< "$line"
     [[ -z $id || $id == \#* ]] && continue

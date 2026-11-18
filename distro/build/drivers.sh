@@ -56,10 +56,13 @@ if [[ $ARCH == x86_64 ]]; then
     rpm -q akmods >/dev/null 2>&1 && rpm -e --nodeps akmods
     systemctl enable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service 2>/dev/null || true
 
-    # Keep nouveau available as a fallback for unsupported NVIDIA GPUs and Secure Boot\n    # systems that cannot load the proprietary module. Do not blacklist it globally.
+    # Use NVIDIA's driver instead of nouveau. If nouveau stays enabled it claims the card first (it's in
+    # the start-up image) and NVIDIA's driver can't load, so RTX cards lose acceleration. The cost:
+    # NVIDIA cards older than RTX 20 / GTX 16 (not supported by this driver), and any NVIDIA card while
+    # Secure Boot blocks the unsigned driver, run on basic graphics. distro/README.md explains both.
     mkdir -p /usr/lib/bootc/kargs.d
     cat > /usr/lib/bootc/kargs.d/00-nvidia.toml <<'EOF'
-kargs = ["nvidia-drm.modeset=1", "nvidia-drm.fbdev=1"]
+kargs = ["rd.driver.blacklist=nouveau", "modprobe.blacklist=nouveau", "nvidia-drm.modeset=1", "nvidia-drm.fbdev=1"]
 match-architectures = ["x86_64"]
 EOF
     cat > /usr/lib/modprobe.d/omnilaunch-nvidia.conf <<'EOF'
