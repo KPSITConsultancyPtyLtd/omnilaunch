@@ -70,6 +70,7 @@ else
     check "FEX (Intel programs on ARM)" rpm -q fex-emu
     check "FEX x86 libraries" rpm -q fex-emu-rootfs-fedora
     check "Intel Wine installed" bash -c 'cat /usr/lib/omnilaunch-wine/OMNILAUNCH-SOURCE && test -x "$(readlink -f /usr/bin/wine)"'
+    check "FEX knows where its Intel system files are" bash -c 'grep -q "\"RootFS\": \"/usr/share/fex-emu/RootFS/omnilaunch.ero\"" /usr/share/fex-emu/Config.json && test -s "$(readlink -f /usr/share/fex-emu/RootFS/omnilaunch.ero)"'
     check "Intel Wine is an x86-64 program (for FEX)" python3 -c '
 import os, sys
 data = open(os.path.realpath("/usr/bin/wine"), "rb").read(20)

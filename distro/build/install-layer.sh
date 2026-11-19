@@ -91,6 +91,28 @@ if [[ $ARCH == aarch64 ]]; then
         [[ -e /usr/lib/omnilaunch-wine/bin/$tool ]] && ln -sfn "/usr/lib/omnilaunch-wine/bin/$tool" "/usr/bin/$tool"
     done
     echo "$name" > /usr/lib/omnilaunch-wine/OMNILAUNCH-SOURCE
+
+    # FEX needs a set of Intel system files (its "RootFS"). Fedora ships one but doesn't point FEX at it,
+    # and FEX only recognises .ero/.sqsh names, so link it under a name FEX accepts and set it as the
+    # system-wide default. (Apple Silicon is different: muvm sets the RootFS up itself, so a Fedora Asahi
+    # install keeps Fedora's own setup.)
+    if $IMAGE; then
+        rootfs=$(find /usr/share/fex-emu/RootFS -maxdepth 1 -name '*.erofs' | head -1)
+        [[ -n $rootfs ]] || { echo "No FEX RootFS image in /usr/share/fex-emu/RootFS" >&2; exit 1; }
+        ln -sfn "$(basename "$rootfs")" /usr/share/fex-emu/RootFS/omnilaunch.ero
+        python3 - <<'EOF'
+import json, os
+path = "/usr/share/fex-emu/Config.json"
+config = {}
+if os.path.exists(path):
+    with open(path) as f:
+        config = json.load(f)
+config.setdefault("Config", {})["RootFS"] = "/usr/share/fex-emu/RootFS/omnilaunch.ero"
+with open(path, "w") as f:
+    json.dump(config, f, indent=2)
+print("FEX RootFS:", config["Config"]["RootFS"])
+EOF
+    fi
 fi
 
 # ---------------------------------------------------------------- Proton launcher, when Fedora lacks it

@@ -42,8 +42,10 @@ rpms=$(find "$work" -name "kmod-nvidia-${KVER}-*.rpm")
 [[ -n $rpms ]] || { echo "akmodsbuild made no driver package for $KVER" >&2; ls -R "$work"; exit 1; }
 cp $rpms /out/
 # Prove it's the open driver: its licence is "Dual MIT/GPL"; the closed one says "NVIDIA".
-rpm2cpio /out/kmod-nvidia-*.rpm | (cd /tmp && cpio -idm --quiet)
-ko=$(find /tmp/usr/lib/modules -name 'nvidia.ko*' | head -1)
+unpacked=$(mktemp -d)
+for rpm in /out/kmod-nvidia-*.rpm; do rpm2cpio "$rpm" | (cd "$unpacked" && cpio -idm --quiet); done
+ko=$(find "$unpacked" -name 'nvidia.ko*' | head -1)
+[[ -n $ko ]] || { echo "No nvidia.ko in the driver package:" >&2; find "$unpacked" -name '*.ko*' >&2; exit 1; }
 modinfo -F license "$ko" | tee /out/license
 grep -q "MIT" /out/license
 ls -l /out

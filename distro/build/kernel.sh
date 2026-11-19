@@ -5,6 +5,9 @@ set -euo pipefail
 ARCH=$(uname -m)
 log() { printf '\n==> %s\n' "$*"; }
 
+# Mirrors occasionally drop connections; retry rather than fail (kept in the image for users too).
+grep -q '^retries=' /etc/dnf/dnf.conf || printf 'retries=10\ntimeout=60\n' >> /etc/dnf/dnf.conf
+
 log "Updating to the newest Fedora packages, kernel included"
 dnf -y upgrade --refresh
 

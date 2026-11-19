@@ -101,7 +101,8 @@ jobs:
           # PCs must run Windows apps. On ARM they go through FEX, which CI machines may not allow.
           REQUIRE_WINDOWS: ${{ matrix.arch == 'x86_64' && '1' || '0' }}
         run: |
-          sudo podman run --rm --privileged --device /dev/fuse -e REQUIRE_WINDOWS \
+          # (sudo drops environment variables, so pass the value itself)
+          sudo podman run --rm --privileged --device /dev/fuse -e "REQUIRE_WINDOWS=$REQUIRE_WINDOWS" \
             -v "$PWD:/src:ro" localhost/omnilaunch-os:latest bash /src/distro/build/compat-test.sh
 
       - name: Publish the OS image (installed systems update from here)
