@@ -422,3 +422,16 @@ class ArmWineTests(TmpCase):
         self.with_tools("wine", "box64")
         lp = runners.plan(detect(_write(self.d, "putty.exe", fake_pe())))
         self.assertNotIn("box64", lp.argv[0])
+
+
+class WineServerCommandTests(TmpCase):
+    def test_server_runs_through_box64_when_wine_does(self):
+        wine_dir = os.path.join(self.d, "wine", "bin")
+        os.makedirs(wine_dir)
+        for tool in ("wine", "wineserver"):
+            _write(wine_dir, tool, b"\x7fELF")
+        wine = os.path.join(wine_dir, "wine")
+        self.assertEqual(runners.wineserver_command(["/usr/bin/box64", wine, "app.exe"]),
+                         ["/usr/bin/box64", os.path.join(wine_dir, "wineserver")])
+        self.assertEqual(runners.wineserver_command([wine, "app.exe"]), [os.path.join(wine_dir, "wineserver")])
+        self.assertEqual(runners.wineserver_command(wine), [os.path.join(wine_dir, "wineserver")])

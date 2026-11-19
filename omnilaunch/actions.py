@@ -178,7 +178,7 @@ def run(action_id: str, files: list, gui: bool = False) -> int:
         results.append(message)
         print(f"[omnilaunch] {message}", file=sys.stderr, flush=True)
     if runners.HOST_OS != "windows" and lp.runner.startswith("wine"):
-        runners.warm_wineserver(lp.argv[0], lp.prefix)   # the next action starts faster
+        runners.warm_wineserver(lp.argv, lp.prefix)   # the next action starts faster
     if gui:
         desktop.notify("OmniLaunch", results[0] if len(results) == 1 else f"Extracted {len(results)} archives")
     return 0

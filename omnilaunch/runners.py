@@ -822,15 +822,29 @@ def run_collect(argv, **kw) -> subprocess.CompletedProcess:
     return r
 
 
-def warm_wineserver(wine: str, prefix: str) -> bool:
+def wineserver_command(launch_argv: list) -> list | None:
+    """How to run Wine's server for a launch command: the server next to that launch's Wine, through Box64
+    when Wine itself runs through Box64 (otherwise an ARM computer would hand it to a different
+    translator). Accepts a plan's argv, or just a Wine path."""
+    argv = [launch_argv] if isinstance(launch_argv, str) else list(launch_argv)
+    if not argv:
+        return None
+    if os.path.basename(argv[0]) == "box64" and len(argv) > 1:
+        server = find_wineserver(argv[1])
+        return [argv[0], server] if server else None
+    server = find_wineserver(argv[0])
+    return [server] if server else None
+
+
+def warm_wineserver(launch_argv, prefix: str) -> bool:
     """Keep this environment's Wine server running for a while, so the next launch skips its start-up.
     Call it after a program (and anything it started) has finished: normally the server quits a few
-    seconds after the last Windows program closes."""
-    server = find_wineserver(wine)
+    seconds after the last Windows program closes. launch_argv: the plan's argv (or a Wine path)."""
+    server = wineserver_command(launch_argv)
     if not server or not os.path.isdir(os.path.join(prefix, "drive_c")):
         return False
     try:
-        subprocess.Popen([server, f"-p{WARM_SECONDS}"], env={**os.environ, "WINEPREFIX": prefix},
+        subprocess.Popen([*server, f"-p{WARM_SECONDS}"], env={**os.environ, "WINEPREFIX": prefix},
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=(os.name != "nt"))
     except OSError:
         return False

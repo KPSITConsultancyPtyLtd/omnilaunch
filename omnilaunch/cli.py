@@ -271,16 +271,16 @@ def _run_windows_app(lp, env: dict, gui: bool) -> int:
     before = shortcuts.find_shortcuts(lp.prefix)
     code = subprocess.call(lp.argv, cwd=lp.cwd or None, env=env)
     # Installers often hand off to a child process and exit early: wait for everything in the environment.
-    wineserver = runners.find_wineserver(lp.argv[0]) if lp.runner.startswith("wine") else None
+    wineserver = runners.wineserver_command(lp.argv) if lp.runner.startswith("wine") else None
     if "WINEPREFIX" in env and wineserver:
         try:
-            subprocess.run([wineserver, "-w"], env=env, timeout=3600)
+            subprocess.run([*wineserver, "-w"], env=env, timeout=3600)
         except (OSError, subprocess.SubprocessError):
             pass
     env_name = os.path.relpath(lp.prefix, os.path.join(runners.data_dir(), "prefixes")).replace(os.sep, "/")
     added = shortcuts.add_new_programs(lp.prefix, env_name, before)
     if lp.runner.startswith("wine"):
-        runners.warm_wineserver(lp.argv[0], lp.prefix)   # next launch of anything in here starts faster
+        runners.warm_wineserver(lp.argv, lp.prefix)   # next launch of anything in here starts faster
     if added:
         _refresh_actions_quietly()
     if added:
