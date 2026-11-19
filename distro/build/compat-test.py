@@ -1,9 +1,8 @@
 """Runs real apps from other systems inside a built OmniLaunch OS image, through the installed
 `omnilaunch` command, the way a double-click would. Run by compat-test.sh in CI.
 
-Windows apps are required to work on PCs (x86_64). On ARM they run through FEX, which needs the
-build machine's kernel to hand Intel programs to FEX; CI machines may not allow that, so there a
-failure is reported as a warning (REQUIRE_WINDOWS=0) rather than failing the build.
+Windows apps are required to work on both PCs (Wine) and ARM (Box64 + Wine). REQUIRE_WINDOWS=0
+turns their failures into warnings, for experiments.
 """
 import filecmp
 import glob

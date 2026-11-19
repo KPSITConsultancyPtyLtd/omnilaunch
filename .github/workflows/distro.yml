@@ -98,8 +98,8 @@ jobs:
       - name: Run real Windows, Linux and Android apps in the OS image
         timeout-minutes: 40
         env:
-          # PCs must run Windows apps. On ARM they go through FEX, which CI machines may not allow.
-          REQUIRE_WINDOWS: ${{ matrix.arch == 'x86_64' && '1' || '0' }}
+          # Windows apps must work on both: Wine on PCs, Box64 + Wine on ARM (proven in CI).
+          REQUIRE_WINDOWS: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # (sudo drops environment variables, so pass the value itself). The token, for GitHub's API rate
