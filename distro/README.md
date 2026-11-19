@@ -6,7 +6,7 @@ Nothing to set up: double-click a Windows `.exe`/`.msi`, an Android `.apk` or an
 | Opens | How | PC (x86_64) | ARM (aarch64) |
 |---|---|---|---|
 | Linux apps | natively; Flathub in Discover; other distros' apps via Distrobox | ✓ | ✓ |
-| Windows apps | Wine, with NTSYNC for speed | ✓ | ✓ Intel Wine translated by FEX (slower) |
+| Windows apps | Wine, with NTSYNC for speed | ✓ | ✓ Intel Wine translated by Box64 (slower) |
 | Windows games | Steam and Proton (umu), Gamescope, MangoHud | ✓ | – (use Wine) |
 | Android apps | Waydroid (Android in a container, full speed) | ✓ | ✓ |
 | macOS apps | – no working translation layer exists for Apple's desktop frameworks | ✗ | ✗ |

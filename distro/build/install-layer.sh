@@ -92,6 +92,14 @@ if [[ $ARCH == aarch64 ]]; then
     done
     echo "$name" > /usr/lib/omnilaunch-wine/OMNILAUNCH-SOURCE
 
+    # Box64 (built in its own stage) runs Intel Windows apps: OmniLaunch starts them as "box64 wine".
+    if [[ -x /tmp/box64/box64 ]]; then
+        install -m 0755 /tmp/box64/box64 /usr/bin/box64
+        mkdir -p /usr/lib/box64-x86_64-linux-gnu
+        cp -r /tmp/box64/lib/. /usr/lib/box64-x86_64-linux-gnu/ 2>/dev/null || true
+        echo "Box64 $(cat /tmp/box64/VERSION) installed"
+    fi
+
     # FEX needs a set of Intel system files (its "RootFS"). Fedora ships one but doesn't point FEX at it,
     # and FEX only recognises .ero/.sqsh names, so link it under a name FEX accepts and set it as the
     # system-wide default. (Apple Silicon is different: muvm sets the RootFS up itself, so a Fedora Asahi

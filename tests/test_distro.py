@@ -50,7 +50,7 @@ class ScriptTests(unittest.TestCase):
     def test_containerfiles_are_well_formed(self):
         for name, froms_expected in (
                 ("Containerfile", ["FROM quay.io/fedora-ostree-desktops/kinoite:${FEDORA} AS base",
-                                   "FROM base AS nvidia", "FROM base"]),
+                                   "FROM base AS nvidia", "FROM base AS box64", "FROM base"]),
                 ("Containerfile.live", ["FROM localhost/omnilaunch-os:latest"])):
             with open(os.path.join(ROOT, "distro", name)) as f:
                 lines = f.read().splitlines()

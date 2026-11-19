@@ -713,8 +713,8 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
     if not os.path.isdir(os.path.join(root, "drive_c")) and not os.path.isdir(os.path.join(root, "pfx")):
         notes.append("First launch: setting up the Windows environment can take a minute.")
     if HOST_OS == "linux" and HOST_ARCH not in ("x86_64", "x86") and info.arch in ("x86_64", "x86"):
-        if which("FEXInterpreter"):
-            notes.append("Intel Windows app on ARM: Wine and the app are translated by FEX, so expect it to be slower.")
+        if which("box64") or which("FEXInterpreter"):
+            notes.append("Intel Windows app on ARM: Wine and the app are translated (Box64), so expect it to be slower.")
         else:
             notes.append("x86 Windows app on an ARM host: needs an Intel Wine translated by FEX or box64 "
                          "(built into OmniLaunch OS).")
@@ -767,7 +767,31 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
 
     argv = [wine, *special.get(ext, []), info.executable, *[host_path_for_windows(a) for a in args]]
     label = f"wine ({ext.lstrip('.')})" if ext in special else "wine"
+    translator = _x86_translator_for(wine)
+    if translator:
+        # Intel Wine on an ARM computer: run it through Box64, which handles Wine's preloader.
+        argv = [translator, *argv]
+        env.update({"BOX64_NOBANNER": "1", "BOX64_LOG": "1" if verbose else "0"})
+        label += " via Box64"
     return LaunchPlan(label, argv, env, notes, prefix=root)
+
+
+def _is_x86_64_elf(path: str) -> bool:
+    try:
+        with open(os.path.realpath(path), "rb") as f:
+            head = f.read(20)
+    except OSError:
+        return False
+    return head[:4] == b"\x7fELF" and int.from_bytes(head[18:20], "little") == 62
+
+
+def _x86_translator_for(wine: str) -> str | None:
+    """Box64, when this is an ARM Linux computer whose Wine is an Intel build and Box64 is installed
+    (as on OmniLaunch OS). OMNILAUNCH_X86_TRANSLATOR=fex leaves it to FEX instead."""
+    if HOST_OS != "linux" or HOST_ARCH != "arm64" or os.environ.get("OMNILAUNCH_X86_TRANSLATOR") == "fex":
+        return None
+    box64 = which("box64")
+    return box64 if box64 and _is_x86_64_elf(wine) else None
 
 
 WARM_SECONDS = 900   # keep each environment's Wine server up 15 minutes after its last program exits

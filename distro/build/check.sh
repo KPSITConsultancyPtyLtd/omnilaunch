@@ -75,7 +75,8 @@ else
 import os, sys
 data = open(os.path.realpath("/usr/bin/wine"), "rb").read(20)
 sys.exit(0 if data[:4] == b"\x7fELF" and int.from_bytes(data[18:20], "little") == 62 else 1)'
-    check "a Windows app is planned with Wine" bash -c 'omnilaunch run --dry-run /tmp/app.exe 2>&1 | grep -i "wine"'
+    check "Box64 (runs Intel Windows apps)" box64 --version
+    check "a Windows app is planned with Box64 + Wine" bash -c 'omnilaunch run --dry-run /tmp/app.exe 2>&1 | grep -i "box64"'
 fi
 
 echo

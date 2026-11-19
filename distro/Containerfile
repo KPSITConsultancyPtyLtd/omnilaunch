@@ -13,7 +13,13 @@ FROM base AS nvidia
 COPY distro/build/nvidia-kmod.sh distro/build/rpmfusion.sh /tmp/
 RUN --mount=type=secret,id=mok_key --mount=type=secret,id=mok_cert bash /tmp/nvidia-kmod.sh
 
-# 3. OmniLaunch OS.
+# 3. Box64, the newest release, built for ARM in a throwaway stage (ARM only; empty elsewhere).
+FROM base AS box64
+COPY omnilaunch /src/omnilaunch
+COPY distro/build/box64.sh /tmp/box64.sh
+RUN bash /tmp/box64.sh /src
+
+# 4. OmniLaunch OS.
 FROM base
 LABEL org.opencontainers.image.title="OmniLaunch OS" \
       org.opencontainers.image.description="Linux that opens apps from every system: Windows, Android and Linux" \
@@ -21,6 +27,7 @@ LABEL org.opencontainers.image.title="OmniLaunch OS" \
       containers.bootc="1"
 
 COPY --from=nvidia /out /tmp/nvidia
+COPY --from=box64 /out /tmp/box64
 COPY omnilaunch /src/omnilaunch
 COPY bin /src/bin
 COPY LICENSE NOTICE /src/
@@ -31,6 +38,6 @@ RUN --mount=type=secret,id=github_token \
     export GITHUB_TOKEN="$(cat /run/secrets/github_token 2>/dev/null || true)" && \
     bash /src/distro/build/drivers.sh && \
     bash /src/distro/build/install-layer.sh --image /src && \
-    rm -rf /src /tmp/nvidia
+    rm -rf /src /tmp/nvidia /tmp/box64
 
 RUN bootc container lint

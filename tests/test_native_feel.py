@@ -388,3 +388,37 @@ class WineServerTests(TmpCase):
         lp = runners.plan(detect(_write(self.d, "putty.exe", fake_pe())))
         self.assertEqual(lp.runner, "wine")
         self.assertTrue(lp.env.get("WINESERVER", "").endswith("wineserver"))
+
+
+class ArmWineTests(TmpCase):
+    def _intel_wine(self):
+        wine = os.path.join(self.d, "bin", "wine")
+        os.makedirs(os.path.dirname(wine), exist_ok=True)
+        with open(wine, "wb") as f:
+            f.write(b"\x7fELF" + b"\0" * 14 + (62).to_bytes(2, "little") + b"\0" * 40)   # x86-64 program
+        os.chmod(wine, 0o755)
+        return wine
+
+    def test_intel_wine_on_arm_runs_through_box64(self):
+        self.host("linux", "arm64")
+        wine = self._intel_wine()
+        tools = {"wine": wine, "box64": "/usr/bin/box64"}
+        with mock.patch.object(runners, "which", side_effect=lambda *n: next((tools[x] for x in n if x in tools), None)):
+            lp = runners.plan(detect(_write(self.d, "putty.exe", fake_pe())))
+        self.assertEqual(lp.argv[:2], ["/usr/bin/box64", wine])
+        self.assertEqual(lp.runner, "wine via Box64")
+
+    def test_fex_can_be_chosen_instead(self):
+        self.host("linux", "arm64")
+        wine = self._intel_wine()
+        tools = {"wine": wine, "box64": "/usr/bin/box64"}
+        with mock.patch.object(runners, "which", side_effect=lambda *n: next((tools[x] for x in n if x in tools), None)), \
+                mock.patch.dict(os.environ, {"OMNILAUNCH_X86_TRANSLATOR": "fex"}):
+            lp = runners.plan(detect(_write(self.d, "putty.exe", fake_pe())))
+        self.assertEqual(lp.argv[0], wine)
+
+    def test_pc_wine_is_never_wrapped(self):
+        self.host("linux", "x86_64")
+        self.with_tools("wine", "box64")
+        lp = runners.plan(detect(_write(self.d, "putty.exe", fake_pe())))
+        self.assertNotIn("box64", lp.argv[0])

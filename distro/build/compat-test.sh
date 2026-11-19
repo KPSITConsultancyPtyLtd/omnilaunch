@@ -20,6 +20,7 @@ if [[ $(uname -m) == aarch64 ]]; then
                "FEXBash -c /usr/lib/omnilaunch-wine/bin/wineserver\ --version" "FEXInterpreter /usr/lib/omnilaunch-wine/bin/wineserver --version"; do
         echo "\$ $cmd"; timeout 120 bash -c "$cmd" 2>&1 | tail -4 || true
     done
+    echo "\$ box64 --version"; box64 --version 2>&1 | tail -2 || true
     echo "--- end of FEX diagnostics"
 fi
 
