@@ -100,10 +100,15 @@ jobs:
         env:
           # PCs must run Windows apps. On ARM they go through FEX, which CI machines may not allow.
           REQUIRE_WINDOWS: ${{ matrix.arch == 'x86_64' && '1' || '0' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # (sudo drops environment variables, so pass the value itself)
+          # (sudo drops environment variables, so pass the value itself). The token, for GitHub's API rate
+          # limit, goes in as a private file rather than on the command line.
+          umask 077; printf '%s' "$GITHUB_TOKEN" > "$WORK/tmp/token"; umask 022
           sudo podman run --rm --privileged --device /dev/fuse -e "REQUIRE_WINDOWS=$REQUIRE_WINDOWS" \
+            -v "$WORK/tmp/token:/run/github-token:ro" \
             -v "$PWD:/src:ro" localhost/omnilaunch-os:latest bash /src/distro/build/compat-test.sh
+          rm -f "$WORK/tmp/token"
 
       - name: Publish the OS image (installed systems update from here)
         if: github.ref == 'refs/heads/main'
