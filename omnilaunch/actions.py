@@ -171,10 +171,15 @@ def run(action_id: str, files: list, gui: bool = False) -> int:
             r = runners.run_collect(argv, env=env, cwd=cwd)
         except (OSError, runners.UnsupportedApp) as e:
             return fail(f"couldn't run {action.program}: {e}", 4)
-        if r.returncode != 0 or not os.path.exists(output):
-            detail = [ln for ln in (r.stdout + r.stderr).splitlines() if "ERROR" in ln.upper()][-1:] or \
-                     (r.stdout + r.stderr).strip().splitlines()[-1:]
-            return fail(f"{action.program} couldn't do that: {' '.join(detail) or 'exit code ' + str(r.returncode)}", 5)
+        text = r.stdout + r.stderr
+        # 7-Zip says "Everything is Ok" when it succeeded. Trust that (with the output really there) even if
+        # the exit code is off: a translated Wine (Box64 on ARM) doesn't always pass the code back intact.
+        succeeded = os.path.exists(output) and (r.returncode == 0 or "Everything is Ok" in text)
+        if not succeeded:
+            detail = [ln for ln in text.splitlines() if "ERROR" in ln.upper()][-1:] or text.strip().splitlines()[-1:]
+            where = "" if os.path.exists(output) else f"; no {os.path.basename(output)} was made"
+            return fail(f"{action.program} couldn't do that: {' '.join(detail) or 'no output'} "
+                        f"(exit code {r.returncode}{where})", 5)
         results.append(message)
         print(f"[omnilaunch] {message}", file=sys.stderr, flush=True)
     if runners.HOST_OS != "windows" and lp.runner.startswith("wine"):

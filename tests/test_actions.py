@@ -221,3 +221,26 @@ class BackgroundHelperTests(unittest.TestCase):
         r = runners.run_collect(["/bin/sh", "-c", "sleep 30 & echo Everything is Ok"])
         self.assertLess(time.time() - t, 10)
         self.assertIn("Everything is Ok", r.stdout)
+
+
+class TranslatedWineExitCodeTests(Base):
+    def test_seven_zip_success_counts_even_with_a_garbled_exit_code(self):
+        """Under Box64 (ARM), Wine may not pass 7-Zip's exit code back intact."""
+        self.install_7zip()
+        src = _write(self.d, "notes.txt", b"hello")
+
+        def fake(argv, **kw):
+            open(os.path.join(self.d, "notes.7z"), "w").close()
+            return mock.Mock(returncode=1, stdout="Everything is Ok\n", stderr="")
+        with mock.patch.object(runners, "run_collect", side_effect=fake), \
+                mock.patch.object(runners, "warm_wineserver"), \
+                mock.patch.object(desktop, "notify"), mock.patch.object(desktop, "alert"):
+            self.assertEqual(actions.run("compress-7z", [src], gui=False), 0)
+
+    def test_missing_output_is_still_a_failure(self):
+        self.install_7zip()
+        src = _write(self.d, "notes.txt", b"hello")
+        with mock.patch.object(runners, "run_collect", return_value=mock.Mock(returncode=0, stdout="Everything is Ok", stderr="")), \
+                mock.patch.object(runners, "warm_wineserver"), \
+                mock.patch.object(desktop, "notify"), mock.patch.object(desktop, "alert"):
+            self.assertEqual(actions.run("compress-7z", [src], gui=False), 5)
