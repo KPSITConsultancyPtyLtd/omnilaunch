@@ -9,7 +9,7 @@ on:
     - cron: "17 16 * * 5"     # Saturdays 3:17am Sydney time
   push:
     branches: [main]
-    paths: ["distro/**", ".github/workflows/distro.yml"]
+    paths: ["distro/**", "omnilaunch/**", "bin/**", ".github/workflows/distro.yml"]
 
 concurrency:
   group: distro-${{ github.ref }}
