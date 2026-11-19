@@ -113,7 +113,10 @@ jobs:
           printf '%s' "$GITHUB_TOKEN" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           day=$(date -u +%Y%m%d)
           for tag in "latest-${{ matrix.arch }}" "$day-${{ matrix.arch }}"; do
-            sudo podman push --retry 3 --digestfile "$WORK/tmp/digest" localhost/omnilaunch-os:latest "docker://$IMAGE:$tag"
+            for attempt in 1 2 3; do
+              sudo podman push --digestfile "$WORK/tmp/digest" localhost/omnilaunch-os:latest "docker://$IMAGE:$tag" && break
+              [ $attempt = 3 ] && exit 1; sleep 20
+            done
           done
           echo "DIGEST=$(cat "$WORK/tmp/digest")" >> "$GITHUB_ENV"
           sudo podman logout ghcr.io

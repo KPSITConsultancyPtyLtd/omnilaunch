@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import mmap
 import os
+import re
 import plistlib
 import struct
 import zipfile
@@ -31,6 +33,41 @@ class AppInfo:
     interpreter: str = ""  # shebang line for scripts, e.g. "/usr/bin/env python3"
     gui: bool = False      # Linux apps: does it open windows (links X11/GTK/Qt/Wayland/SDL)?
     package: str = ""      # Android apps: package name, e.g. "org.mozilla.firefox"
+
+
+# Libraries only games use (Steam, Epic, Unity, controllers). Direct3D alone isn't a sign: ordinary apps
+# such as VS Code and Discord use it too.
+GAME_LIBRARIES = re.compile(
+    rb"(steam_api(64)?|eossdk-win(32|64)-shipping|unityplayer|gameoverlayrenderer(64)?|"
+    rb"xinput1_[34]|xinput9_1_0|gameinput|galaxy(64)?|discord_game_sdk)\.dll", re.IGNORECASE)
+GAME_SIBLINGS = ("unityplayer.dll", "steam_api64.dll", "steam_api.dll", "eossdk-win64-shipping.dll",
+                 "galaxy64.dll", "steam_appid.txt")
+
+
+def looks_like_game(path: str) -> bool:
+    """A Windows game rather than an ordinary app or installer: it links game libraries, or sits next to
+    a game engine's files (Unity's UnityPlayer.dll and <name>_Data folder, Unreal's Engine folder)."""
+    folder = os.path.dirname(os.path.abspath(path))
+    try:
+        names = {n.lower() for n in os.listdir(folder)}
+    except OSError:
+        names = set()
+    if names & set(GAME_SIBLINGS) or "engine" in names and any(n.endswith(".uproject") or n == "binaries" for n in names):
+        return True
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    if f"{stem}_data" in names:
+        return True                                   # Unity games keep their assets in <name>_Data
+    try:
+        with open(path, "rb") as f:
+            if os.fstat(f.fileno()).st_size == 0:
+                return False
+            data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                return GAME_LIBRARIES.search(data) is not None
+            finally:
+                data.close()
+    except (OSError, ValueError):
+        return False
 
 
 ELF_MACHINES = {0x03: "x86", 0x3E: "x86_64", 0x28: "arm", 0xB7: "arm64", 0xF3: "riscv"}

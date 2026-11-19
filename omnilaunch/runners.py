@@ -355,10 +355,14 @@ def default_runner(info: AppInfo) -> str:
             return "native"   # explained as unsupported by _windows_native
         return "wsl" if find_wsl() or not find_container_engine() else "container"
     if info.platform == Platform.WINDOWS:
-        if HOST_OS == "linux" and (find_umu() or os.environ.get("OMNILAUNCH_PROTON")):
-            return "proton"
         if os.environ.get("OMNILAUNCH_WINDOWS_RUNNER") in RUNNERS:
             return os.environ["OMNILAUNCH_WINDOWS_RUNNER"]
+        if HOST_OS == "linux" and (find_umu() or os.environ.get("OMNILAUNCH_PROTON")):
+            # Proton (Valve's Wine for games, run in Steam's runtime) for games; plain Wine for apps and
+            # installers, which start faster and don't need Proton's ~1 GB first download.
+            from .detect import looks_like_game
+            if not find_wine() or looks_like_game(info.executable):
+                return "proton"
         if rosetta_era_over():
             return "box64"   # Wine on a Mac needs Rosetta, which macOS 28+ no longer offers for apps
         if find_wine():
@@ -754,6 +758,12 @@ def _windows(info: AppInfo, args: list[str], runner: str, verbose: bool,
     env = {"WINEPREFIX": root, "WINEDLLOVERRIDES": _dll_overrides()}
     if not verbose:
         env["WINEDEBUG"] = "-all"
+    # Tell Wine exactly where its server is: it normally works that out from its own location, which it
+    # can't see when translated (FEX on ARM) or started through a link, and then fails with
+    # "could not exec wineserver".
+    server = find_wineserver(wine)
+    if server:
+        env["WINESERVER"] = os.path.realpath(server)
 
     argv = [wine, *special.get(ext, []), info.executable, *[host_path_for_windows(a) for a in args]]
     label = f"wine ({ext.lstrip('.')})" if ext in special else "wine"

@@ -145,8 +145,30 @@ class AndroidTests(TmpCase):
 # ---------------------------------------------------------------- Proton for games on Linux
 
 class ProtonTests(TmpCase):
+    def test_apps_and_installers_use_wine_even_with_proton_installed(self):
+        self.with_tools("umu-run", "wine")
+        for name in ("putty.exe", "7z2301-x64.exe"):
+            lp = runners.plan(detect(_write(self.d, name, fake_pe())))
+            self.assertEqual(lp.runner, "wine", name)
+
+    def test_games_use_proton(self):
+        self.with_tools("umu-run", "wine")
+        game = os.path.join(self.d, "unity-game")
+        os.makedirs(os.path.join(game, "Hollow_Data"))                 # a Unity game's assets folder
+        self.assertEqual(runners.plan(detect(_write(game, "Hollow.exe", fake_pe()))).runner, "proton (umu)")
+        steam = os.path.join(self.d, "steam-game")
+        os.makedirs(steam)
+        pe = fake_pe() + b"\0KERNEL32.dll\0steam_api64.dll\0"         # imports Steam's library
+        self.assertEqual(runners.plan(detect(_write(steam, "Game.exe", pe))).runner, "proton (umu)")
+
+    def test_direct3d_alone_is_not_a_game(self):
+        self.with_tools("umu-run", "wine")
+        pe = fake_pe() + b"\0d3d11.dll\0dxgi.dll\0"                   # like VS Code or Discord
+        self.assertEqual(runners.plan(detect(_write(self.d, "Code.exe", pe))).runner, "wine")
+
     def test_umu_used_for_exe_on_linux(self):
         self.with_tools("umu-run", "wine")
+        open(os.path.join(self.d, "steam_appid.txt"), "w").close()      # next to Steam game files
         lp = runners.plan(detect(_write(self.d, "Game Launcher.exe", fake_pe())), ["-windowed"])
         self.assertEqual(lp.runner, "proton (umu)")
         self.assertEqual(lp.argv, ["/usr/bin/umu-run", os.path.join(self.d, "Game Launcher.exe"), "-windowed"])
@@ -357,3 +379,12 @@ class GuiModeTests(TmpCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WineServerTests(TmpCase):
+    def test_wine_is_told_where_its_server_is(self):
+        """Translated (FEX) or linked Wine can't find wineserver by itself."""
+        self.with_tools("wine", "wineserver")
+        lp = runners.plan(detect(_write(self.d, "putty.exe", fake_pe())))
+        self.assertEqual(lp.runner, "wine")
+        self.assertTrue(lp.env.get("WINESERVER", "").endswith("wineserver"))
