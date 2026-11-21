@@ -39,7 +39,7 @@ jobs:
       packages: write      # publishes the OS image
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           persist-credentials: false
       - name: Make room and use the biggest disk
@@ -235,17 +235,22 @@ jobs:
             -kernel boot/vmlinuz -initrd boot/initrd.img \
             -append "root=live:CDLABEL=OmniLaunch-OS rd.live.image enforcing=0 console=ttyAMA0 systemd.unit=multi-user.target" \
             > boot.log 2>&1 &
+          # Booted = the live system is up and services are running. With KVM, wait for the login prompt;
+          # emulated, a real machine's few seconds take ~35 minutes, so the live system starting its
+          # services and enabling user logins is the proof.
+          if [ -e /dev/kvm ]; then booted="login:|Reached target.*Multi-User"
+          else booted="login:|Reached target.*Multi-User|Finished.*systemd-user-sessions.service"; fi
           for i in $(seq 1 $limit); do
-            if grep -qE "login:|Reached target.*Multi-User" boot.log; then ok=1; break; fi
+            if grep -qE "$booted" boot.log; then ok=1; break; fi
             if grep -qE "Kernel panic|dracut-emergency|Entering emergency mode" boot.log; then break; fi
             sleep 5
           done
           kill %1 2>/dev/null || true
-          grep -E "OmniLaunch OS|Reached target|login:|panic|emergency" boot.log | tail -15
+          grep -E "OmniLaunch OS|Reached target|user-sessions|login:|panic|emergency" boot.log | tail -15
           [ "${ok:-}" = 1 ] || { echo "The ARM live system didn't finish booting"; tail -60 boot.log; exit 1; }
           echo "PASS  the ARM live USB boots to OmniLaunch OS"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: OmniLaunch-OS-${{ matrix.arch }}
           path: |
@@ -263,7 +268,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           persist-credentials: false
       - name: Combine the PC and ARM images under :latest
