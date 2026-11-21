@@ -213,6 +213,38 @@ jobs:
           [ "${ok:-}" = 1 ] || { echo "The live system didn't finish booting"; tail -60 boot.log; exit 1; }
           echo "PASS  the live USB boots to OmniLaunch OS"
 
+      - name: Boot the ARM .iso in a virtual machine (as UTM does)
+        if: matrix.arch == 'aarch64'
+        timeout-minutes: 40
+        run: |
+          sudo apt-get install -yq qemu-system-arm qemu-efi-aarch64 >/dev/null
+          firmware=$(ls /usr/share/qemu-efi-aarch64/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd 2>/dev/null | head -1)
+          [ -n "$firmware" ] || { echo "no ARM UEFI firmware"; exit 1; }
+          # UEFI-bootable, like UTM needs:
+          xorriso -indev "$ISO" -ls /EFI/BOOT 2>/dev/null | grep -qi 'BOOTAA64.EFI' || { echo "no BOOTAA64.EFI on the ISO"; exit 1; }
+          mkdir -p boot
+          xorriso -osirrox on -indev "$ISO" -extract /images/pxeboot/vmlinuz boot/vmlinuz \
+                  -extract /images/pxeboot/initrd.img boot/initrd.img >/dev/null 2>&1
+          chmod 644 boot/*
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; accel="-enable-kvm -cpu host"; limit=170
+          else echo "No KVM: emulating the CPU (slower)"; accel="-accel tcg,thread=multi -cpu max"; limit=420; fi
+          # UEFI firmware, then the ISO's own kernel, start-up image and live system, with a serial console.
+          timeout 2100 qemu-system-aarch64 -M virt $accel -m 4096 -smp 4 -nographic -no-reboot \
+            -bios "$firmware" \
+            -device virtio-scsi-pci -drive file="$ISO",if=none,id=cd,media=cdrom,readonly=on -device scsi-cd,drive=cd \
+            -kernel boot/vmlinuz -initrd boot/initrd.img \
+            -append "root=live:CDLABEL=OmniLaunch-OS rd.live.image enforcing=0 console=ttyAMA0 systemd.unit=multi-user.target" \
+            > boot.log 2>&1 &
+          for i in $(seq 1 $limit); do
+            if grep -qE "login:|Reached target.*Multi-User" boot.log; then ok=1; break; fi
+            if grep -qE "Kernel panic|dracut-emergency|Entering emergency mode" boot.log; then break; fi
+            sleep 5
+          done
+          kill %1 2>/dev/null || true
+          grep -E "OmniLaunch OS|Reached target|login:|panic|emergency" boot.log | tail -15
+          [ "${ok:-}" = 1 ] || { echo "The ARM live system didn't finish booting"; tail -60 boot.log; exit 1; }
+          echo "PASS  the ARM live USB boots to OmniLaunch OS"
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: OmniLaunch-OS-${{ matrix.arch }}
